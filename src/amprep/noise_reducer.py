@@ -1,0 +1,55 @@
+from abc import ABC, abstractmethod
+
+import numpy as np
+
+from amprep.types import Frame
+
+
+def _validate(frame: Frame, label: str) -> None:
+    """Raise ``TypeError`` when ``frame`` is not a valid video frame."""
+    if not isinstance(frame, np.ndarray):
+        raise TypeError(f"Expected {label} to be a NumPy array, got {type(frame)}")
+    if frame.dtype != np.uint8:
+        raise TypeError(f"Expected {label} to be uint8, got {frame.dtype}")
+
+
+class NoiseReducer(ABC):
+    """Removes sensor noise from a frame before background subtraction.
+
+    Subclass this and implement ``_apply`` to plug in your own denoising.
+    Do not override ``apply`` — it validates the input and the returned
+    frame against the contract below. Pass an instance to
+    ``AdaptiveMotionPreprocessor(noise_reducer=...)``; leave it unset and
+    the package's default implementation is used instead.
+
+    Contract:
+        ``_apply`` must return a frame with the **same shape and dtype**
+        as its input — ``uint8``, ``(H, W, 3)``, BGR. Downstream stages
+        size their buffers from the first frame they see, so a stage that
+        changes shape mid-stream breaks them silently.
+    """
+
+    @abstractmethod
+    def _apply(self, frame: Frame) -> Frame:
+        """Return a denoised copy of ``frame``.
+
+        Args:
+            frame: The frame to denoise. See ``Frame`` for its contract.
+
+        Returns:
+            A frame of the same shape and dtype as the input.
+        """
+
+    def apply(self, frame: Frame) -> Frame:
+        """Return a denoised copy of ``frame``."""
+        _validate(frame, "the input frame")
+
+        result = self._apply(frame)
+
+        _validate(result, "the frame returned by _apply")
+        if result.shape != frame.shape:
+            raise ValueError(
+                f"_apply must preserve shape: {frame.shape} -> {result.shape}"
+            )
+
+        return result
