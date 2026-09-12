@@ -10,12 +10,9 @@ def test_types_are_importable():
 
 
 def test_motion_image_post_init_accepts_uint8():
-    try:
-        MotionImage(
-            data=np.array([[1, 2], [3, 4]], dtype=np.uint8), frame_indices=(0, 1)
-        )
-    except TypeError:
-        pytest.fail("MotionImage raised TypeError unexpectedly with uint8 data.")
+    MotionImage(
+        data=np.array([[1, 2], [3, 4]], dtype=np.uint8), frame_indices=(0, 1)
+    )
 
 
 def test_motion_image_holds_data_and_indices():
