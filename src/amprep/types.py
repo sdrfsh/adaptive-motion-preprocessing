@@ -9,7 +9,7 @@ Frame = NDArray[np.uint8]
 Contract:
     dtype:          ``numpy.uint8`` (values 0-255)
     shape:          ``(H, W, 3)``
-    channel order:  **BGR**, as returned by ``cv2.VideoCapture.read()``
+    channel order:  **BGR**, the order OpenCV decodes a frame into
 
 BGR is not a bug to be fixed. Frames are consumed by OpenCV operations
 throughout the pipeline; converting to RGB here would silently change
