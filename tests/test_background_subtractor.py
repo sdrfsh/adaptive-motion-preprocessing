@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from amprep import BackgroundSubtractor, Frame
+from amprep import BackgroundSubtractor, Frame, KNNBackgroundSubtractor
 
 
 def _frame(height: int = 64, width: int = 64) -> Frame:
@@ -278,3 +278,176 @@ def test_reset_does_not_prevent_further_use():
 
     assert subtractor.called
     assert mask.shape == (3, 7)
+
+
+def _train(subtractor: BackgroundSubtractor, frame: Frame, frames: int = 30) -> None:
+    """Feed ``frame`` repeatedly so the background model learns it."""
+    for _ in range(frames):
+        subtractor.apply(frame)
+
+
+def _scene() -> tuple[Frame, Frame]:
+    """Return a flat background frame and the same frame with an object."""
+    background = np.full((32, 32, 3), 50, dtype=np.uint8)
+    occupied = background.copy()
+    occupied[8:24, 8:24] = 200
+    return background, occupied
+
+
+@pytest.mark.parametrize("history", [0, -1, 5.0, "500", True])
+def test_knn_rejects_invalid_history(history):
+    """A history that is not a positive integer is rejected up front."""
+    with pytest.raises(ValueError, match="history must be a positive integer"):
+        KNNBackgroundSubtractor(history=history)
+
+
+@pytest.mark.parametrize("threshold", [0, -1.0, "400", True])
+def test_knn_rejects_invalid_dist2_threshold(threshold):
+    """A threshold that is not a positive number is rejected up front."""
+    with pytest.raises(ValueError, match="dist2_threshold must be a positive number"):
+        KNNBackgroundSubtractor(dist2_threshold=threshold)
+
+
+def test_knn_rejects_non_boolean_detect_shadows():
+    """The shadow switch is a flag, not a truthy value."""
+    with pytest.raises(ValueError, match="detect_shadows must be a boolean"):
+        KNNBackgroundSubtractor(detect_shadows=1)
+
+
+def test_knn_accepts_valid_arguments():
+    """Legal tuning values construct without complaint."""
+    subtractor = KNNBackgroundSubtractor(
+        history=10, dist2_threshold=100, detect_shadows=False
+    )
+
+    assert subtractor._history == 10
+    assert subtractor._dist2_threshold == 100.0
+    assert subtractor._detect_shadows is False
+
+
+def test_knn_does_not_override_apply():
+    """The validating apply is inherited, so its checks still run."""
+    assert KNNBackgroundSubtractor.apply is BackgroundSubtractor.apply
+
+
+def test_knn_validates_its_input():
+    """Inheriting apply means the input checks guard the KNN model too."""
+    with pytest.raises(TypeError, match="the input frame to be a NumPy array"):
+        KNNBackgroundSubtractor().apply("not a frame")
+
+
+def test_knn_returns_uint8_mask_of_frame_size():
+    """apply returns a single-channel uint8 mask matching the frame's H x W."""
+    mask = KNNBackgroundSubtractor().apply(_frame(height=8, width=5))
+
+    assert isinstance(mask, np.ndarray)
+    assert mask.dtype == np.uint8
+    assert mask.shape == (8, 5)
+
+
+def test_knn_mask_is_strictly_binary():
+    """Only 0 and 255 reach the caller, never an intermediate shadow grey."""
+    background, occupied = _scene()
+    shadowed = background.copy()
+    shadowed[8:24, 8:24] = 25  # A darkened copy of the background reads as shadow.
+
+    subtractor = KNNBackgroundSubtractor()
+    _train(subtractor, background)
+
+    for frame in (occupied, shadowed):
+        assert set(np.unique(subtractor.apply(frame))) <= {0, 255}
+
+
+def test_knn_marks_a_new_object_as_foreground():
+    """A learned background stays dark while an object arriving on it lights up."""
+    background, occupied = _scene()
+    subtractor = KNNBackgroundSubtractor()
+
+    _train(subtractor, background)
+    mask = subtractor.apply(occupied)
+
+    assert mask[8:24, 8:24].all()
+    assert not mask[:8].any()
+
+
+def test_knn_excludes_shadows_by_default():
+    """A region that merely darkens is not foreground when shadows are detected."""
+    background, _ = _scene()
+    shadowed = background.copy()
+    shadowed[8:24, 8:24] = 25
+
+    subtractor = KNNBackgroundSubtractor()
+    _train(subtractor, background)
+
+    assert not subtractor.apply(shadowed).any()
+
+
+def test_knn_includes_shadows_when_detection_is_off():
+    """Without shadow detection the same darkening counts as foreground."""
+    background, _ = _scene()
+    shadowed = background.copy()
+    shadowed[8:24, 8:24] = 25
+
+    subtractor = KNNBackgroundSubtractor(detect_shadows=False)
+    _train(subtractor, background)
+
+    assert subtractor.apply(shadowed)[8:24, 8:24].all()
+
+
+def test_knn_does_not_mutate_input():
+    """Subtraction leaves the caller's frame intact."""
+    background, occupied = _scene()
+    original = occupied.copy()
+
+    subtractor = KNNBackgroundSubtractor()
+    _train(subtractor, background)
+    subtractor.apply(occupied)
+
+    np.testing.assert_array_equal(occupied, original)
+
+
+def test_knn_reset_discards_the_learned_model():
+    """The same frame reads differently once the learned background is gone."""
+    background, occupied = _scene()
+    subtractor = KNNBackgroundSubtractor()
+
+    _train(subtractor, background)
+    before_reset = subtractor.apply(occupied)
+
+    subtractor.reset()
+    after_reset = subtractor.apply(occupied)
+
+    # Against a learned background only the object is foreground; against an
+    # empty model nothing is known to be background, so the frame is all new.
+    assert not before_reset[:8].any()
+    assert after_reset.all()
+    assert (before_reset != after_reset).any()
+
+
+def test_knn_reset_returns_none():
+    """reset clears state rather than reporting anything."""
+    assert KNNBackgroundSubtractor().reset() is None
+
+
+def test_knn_reset_replaces_the_underlying_model():
+    """The OpenCV model object itself is rebuilt, not reused."""
+    subtractor = KNNBackgroundSubtractor()
+    original = subtractor._subtractor
+
+    subtractor.reset()
+
+    assert subtractor._subtractor is not original
+
+
+def test_knn_relearns_after_reset():
+    """A reset subtractor is fully usable and builds a new model from scratch."""
+    background, occupied = _scene()
+    subtractor = KNNBackgroundSubtractor()
+
+    _train(subtractor, background)
+    subtractor.reset()
+    _train(subtractor, background)
+    mask = subtractor.apply(occupied)
+
+    assert mask[8:24, 8:24].all()
+    assert not mask[:8].any()
