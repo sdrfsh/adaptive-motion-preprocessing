@@ -1,5 +1,6 @@
 from abc import ABC, abstractmethod
 
+import cv2
 import numpy as np
 
 from amprep.types import Frame
@@ -83,3 +84,84 @@ class BackgroundSubtractor(ABC):
             )
 
         return mask
+
+
+class KNNBackgroundSubtractor(BackgroundSubtractor):
+    """Separates foreground with OpenCV's KNN background subtractor.
+
+    The package default. KNN models each pixel's recent history as a
+    cloud of samples and calls a new value foreground when too few of its
+    neighbours sit close to it. That copes with the swaying leaves and
+    rippling water a single-Gaussian model keeps flagging as motion,
+    which matters here because every false foreground pixel becomes
+    spurious motion in the encoded output.
+
+    The mask is strictly binary: 0 for background, 255 for foreground.
+    OpenCV marks shadows with an intermediate grey, and a downstream
+    stage that thresholds a mask at anything other than 0 would silently
+    treat those pixels as half-present, so they are folded into one of
+    the two labels here instead.
+
+    Args:
+        history: Number of recent frames the model is built from. Longer
+            tolerates slower background change but takes longer to
+            forget an object that stops moving and becomes scenery.
+        dist2_threshold: Squared distance between a pixel and a sample
+            for that sample to count as its neighbour. Larger admits
+            more variation as background, so the mask keeps less noise
+            and fewer faint edges.
+        detect_shadows: Whether to recognise shadows and exclude them
+            from the foreground. Shadows move with their subject, so
+            leaving this on keeps them out of the silhouette at a modest
+            cost in speed. Turn it off and they are foreground like any
+            other change.
+    """
+
+    def __init__(
+        self,
+        history: int = 500,
+        dist2_threshold: float = 400.0,
+        detect_shadows: bool = True,
+    ) -> None:
+        if not isinstance(history, int) or isinstance(history, bool) or history <= 0:
+            raise ValueError(f"history must be a positive integer, got {history!r}")
+        if (
+            isinstance(dist2_threshold, bool)
+            or not isinstance(dist2_threshold, (int, float))
+            or dist2_threshold <= 0
+        ):
+            raise ValueError(
+                f"dist2_threshold must be a positive number, got {dist2_threshold!r}"
+            )
+        if not isinstance(detect_shadows, bool):
+            raise ValueError(
+                f"detect_shadows must be a boolean, got {detect_shadows!r}"
+            )
+
+        self._history = history
+        self._dist2_threshold = float(dist2_threshold)
+        self._detect_shadows = detect_shadows
+        self._subtractor = self._build()
+
+    def _build(self) -> cv2.BackgroundSubtractorKNN:
+        """Return a freshly constructed subtractor with no learned model."""
+        return cv2.createBackgroundSubtractorKNN(
+            history=self._history,
+            dist2Threshold=self._dist2_threshold,
+            detectShadows=self._detect_shadows,
+        )
+
+    def _apply(self, frame: Frame) -> Frame:
+        mask = self._subtractor.apply(frame)
+        # OpenCV labels foreground 255 and everything else — background,
+        # and shadows when detect_shadows is on — below it.
+        return np.where(mask == 255, np.uint8(255), np.uint8(0))
+
+    def reset(self) -> None:
+        """Discard the learned background model.
+
+        OpenCV exposes no way to clear a subtractor in place, so the
+        model is thrown away and rebuilt. The next frame is treated as
+        the opening frame of a new scene.
+        """
+        self._subtractor = self._build()
