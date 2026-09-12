@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from amprep import Frame, NoiseReducer
+from amprep import Frame, MedianNoiseReducer, NoiseReducer
 
 
 def test_noise_reducer_is_abstract():
@@ -124,3 +124,74 @@ def test_apply_rejects_shape_changing_output():
 
     with pytest.raises(ValueError, match=expected):
         DummyReducer().apply(frame)
+
+
+def test_median_reducer_rejects_even_ksize():
+    """An even aperture is rejected at construction, not at the first frame."""
+    with pytest.raises(ValueError, match="odd integer greater than 1"):
+        MedianNoiseReducer(ksize=4)
+
+
+@pytest.mark.parametrize("ksize", [1, 0, -3, 5.0, "5"])
+def test_median_reducer_rejects_invalid_ksize(ksize):
+    """Apertures that are not odd integers above 1 are rejected up front."""
+    with pytest.raises(ValueError, match="odd integer greater than 1"):
+        MedianNoiseReducer(ksize=ksize)
+
+
+def test_median_reducer_accepts_odd_ksize():
+    """An odd aperture greater than 1 constructs without complaint."""
+    assert MedianNoiseReducer(ksize=3)._ksize == 3
+
+
+def test_median_reducer_does_not_override_apply():
+    """The validating apply is inherited, so its checks still run."""
+    assert MedianNoiseReducer.apply is NoiseReducer.apply
+
+
+def test_median_reducer_validates_its_input():
+    """Inheriting apply means the input checks guard the median filter too."""
+    with pytest.raises(TypeError, match="NumPy array"):
+        MedianNoiseReducer().apply("not a frame")
+
+
+def test_median_reducer_preserves_shape_and_dtype():
+    """The filtered frame matches the input's shape and dtype."""
+    frame = np.zeros((32, 48, 3), dtype=np.uint8)
+
+    result = MedianNoiseReducer().apply(frame)
+
+    assert result.shape == (32, 48, 3)
+    assert result.dtype == np.uint8
+
+
+def test_median_reducer_removes_salt_and_pepper_noise():
+    """Isolated extreme pixels are discarded rather than averaged in."""
+    frame = np.full((32, 32, 3), 100, dtype=np.uint8)
+    frame[10, 10] = 255
+    frame[20, 20] = 0
+
+    result = MedianNoiseReducer().apply(frame)
+
+    np.testing.assert_array_equal(result, np.full((32, 32, 3), 100, dtype=np.uint8))
+
+
+def test_median_reducer_leaves_clean_frames_alone():
+    """A frame without outliers survives the filter unchanged in its interior."""
+    frame = np.full((32, 32, 3), 100, dtype=np.uint8)
+    frame[:, 16:] = 200
+
+    result = MedianNoiseReducer().apply(frame)
+
+    np.testing.assert_array_equal(result[2:-2, 2:-2], frame[2:-2, 2:-2])
+
+
+def test_median_reducer_does_not_mutate_input():
+    """Filtering returns a new frame and leaves the caller's frame intact."""
+    frame = np.full((32, 32, 3), 100, dtype=np.uint8)
+    frame[10, 10] = 255
+    original = frame.copy()
+
+    MedianNoiseReducer().apply(frame)
+
+    np.testing.assert_array_equal(frame, original)
