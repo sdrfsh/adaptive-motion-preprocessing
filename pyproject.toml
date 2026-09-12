@@ -9,7 +9,27 @@ description = "Adaptive motion preprocessing: video frames in, encoded motion im
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.10"
+authors = [{ name = "Sahar Darafsh" }]
+keywords = ["computer-vision", "motion-detection", "preprocessing", "opencv"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Image Processing",
+    "Typing :: Typed",
+]
 dependencies = ["numpy", "opencv-python"]
+
+[project.urls]
+Homepage = "https://github.com/sdrfsh/adaptive-motion-preprocessing"
+Repository = "https://github.com/sdrfsh/adaptive-motion-preprocessing"
+Issues = "https://github.com/sdrfsh/adaptive-motion-preprocessing/issues"
 
 [project.optional-dependencies]
 dev = [
