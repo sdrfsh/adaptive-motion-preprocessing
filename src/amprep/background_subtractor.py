@@ -26,11 +26,12 @@ def _validate(array: Frame, label: str, ndim: int) -> None:
 class BackgroundSubtractor(ABC):
     """Separates moving foreground from a learned background model.
 
-    Subclass this and implement ``_apply`` to plug in your own subtractor.
-    Do not override ``apply`` — it validates the input frame and the
-    returned mask against the contract below. Pass an instance to
-    ``AdaptiveMotionPreprocessor(background_subtractor=...)``; leave it
-    unset and the package's default implementation is used instead.
+    Subclass this and implement ``_apply`` and ``reset`` to plug in your
+    own subtractor. Do not override ``apply`` — it validates the input
+    frame and the returned mask against the contract below. Pass an
+    instance to ``AdaptiveMotionPreprocessor(background_subtractor=...)``;
+    leave it unset and the package's default implementation is used
+    instead.
 
     Contract:
         ``_apply`` takes a ``uint8`` ``(H, W, 3)`` BGR frame and must
@@ -38,6 +39,11 @@ class BackgroundSubtractor(ABC):
         the same height and width as its input. Implementations are
         stateful: consecutive calls are expected to come from the same
         video, in order, so the background model can adapt.
+
+        ``reset`` discards that accumulated state. It is the caller's way
+        of saying the next frame belongs to a different scene, so a model
+        learned from the preceding frames describes a background that is
+        no longer there.
     """
 
     @abstractmethod
@@ -51,6 +57,16 @@ class BackgroundSubtractor(ABC):
         Returns:
             A single-channel ``uint8`` mask of shape ``(H, W)`` matching
             the input frame's height and width.
+        """
+
+    @abstractmethod
+    def reset(self) -> None:
+        """Discard the learned background model.
+
+        Called when the scene changes — a cut, a camera move, or the
+        start of a different video — so that state accumulated from the
+        preceding frames does not leak into the next one. Implementations
+        that hold no state between frames may leave this empty.
         """
 
     def apply(self, frame: Frame) -> Frame:

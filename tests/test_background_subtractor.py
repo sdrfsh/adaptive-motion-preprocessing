@@ -15,8 +15,8 @@ def test_background_subtractor_is_abstract():
         BackgroundSubtractor()
 
 
-def test_subclass_without_apply_is_abstract():
-    """A subclass without _apply cannot be instantiated."""
+def test_subclass_without_any_hook_is_abstract():
+    """A subclass implementing neither hook cannot be instantiated."""
 
     class DummySubtractor(BackgroundSubtractor):
         pass
@@ -25,7 +25,40 @@ def test_subclass_without_apply_is_abstract():
         DummySubtractor()
 
 
-class RecordingSubtractor(BackgroundSubtractor):
+def test_subclass_without_apply_is_abstract():
+    """Implementing reset alone is not enough: _apply is still required."""
+
+    class ResetOnlySubtractor(BackgroundSubtractor):
+        def reset(self) -> None:
+            pass
+
+    with pytest.raises(TypeError, match="_apply"):
+        ResetOnlySubtractor()
+
+
+def test_subclass_without_reset_is_abstract():
+    """Implementing _apply alone is not enough: reset is still required."""
+
+    class ApplyOnlySubtractor(BackgroundSubtractor):
+        def _apply(self, frame: Frame) -> Frame:
+            return np.zeros(frame.shape[:2], dtype=np.uint8)
+
+    with pytest.raises(TypeError, match="reset"):
+        ApplyOnlySubtractor()
+
+
+class _Subtractor(BackgroundSubtractor):
+    """Base for the apply-focused test doubles.
+
+    Implements ``reset`` as a no-op so each double below declares only the
+    ``_apply`` behaviour the test under it cares about.
+    """
+
+    def reset(self) -> None:
+        pass
+
+
+class RecordingSubtractor(_Subtractor):
     """A subtractor that returns a valid mask and records whether it ran.
 
     Returning a valid mask keeps the output checks quiet, so a rejection
@@ -105,7 +138,7 @@ def test_apply_accepts_non_square_frame():
 def test_apply_uses_custom_subtractor():
     """The public apply method delegates processing to the subclass."""
 
-    class DummySubtractor(BackgroundSubtractor):
+    class DummySubtractor(_Subtractor):
         def _apply(self, frame: Frame) -> Frame:
             return frame.max(axis=2)
 
@@ -121,7 +154,7 @@ def test_apply_passes_the_frame_through_unchanged():
     """The subclass sees exactly the frame the caller passed in."""
     seen: list[Frame] = []
 
-    class DummySubtractor(BackgroundSubtractor):
+    class DummySubtractor(_Subtractor):
         def _apply(self, frame: Frame) -> Frame:
             seen.append(frame)
             return np.zeros(frame.shape[:2], dtype=np.uint8)
@@ -136,7 +169,7 @@ def test_apply_passes_the_frame_through_unchanged():
 def test_apply_allows_state_to_persist_across_calls():
     """Consecutive calls reach the same instance, so a model can adapt."""
 
-    class CountingSubtractor(BackgroundSubtractor):
+    class CountingSubtractor(_Subtractor):
         def __init__(self) -> None:
             self.calls = 0
 
@@ -158,7 +191,7 @@ def test_apply_allows_state_to_persist_across_calls():
 def test_apply_rejects_non_array_output():
     """The public apply method validates the mask type."""
 
-    class DummySubtractor(BackgroundSubtractor):
+    class DummySubtractor(_Subtractor):
         def _apply(self, frame: Frame) -> Frame:
             return "not a mask"
 
@@ -171,7 +204,7 @@ def test_apply_rejects_non_array_output():
 def test_apply_rejects_non_uint8_output():
     """The public apply method validates the mask dtype."""
 
-    class DummySubtractor(BackgroundSubtractor):
+    class DummySubtractor(_Subtractor):
         def _apply(self, frame: Frame) -> Frame:
             return np.zeros(frame.shape[:2], dtype=np.float32)
 
@@ -182,7 +215,7 @@ def test_apply_rejects_non_uint8_output():
 def test_apply_rejects_multi_channel_output():
     """The public apply method requires a single-channel mask."""
 
-    class DummySubtractor(BackgroundSubtractor):
+    class DummySubtractor(_Subtractor):
         def _apply(self, frame: Frame) -> Frame:
             return np.zeros(frame.shape, dtype=np.uint8)
 
@@ -195,7 +228,7 @@ def test_apply_rejects_multi_channel_output():
 def test_apply_rejects_size_changing_output():
     """The public apply method requires _apply to preserve frame H x W."""
 
-    class DummySubtractor(BackgroundSubtractor):
+    class DummySubtractor(_Subtractor):
         def _apply(self, frame: Frame) -> Frame:
             return np.zeros((frame.shape[0] // 2, frame.shape[1] // 2), dtype=np.uint8)
 
@@ -203,3 +236,45 @@ def test_apply_rejects_size_changing_output():
 
     with pytest.raises(ValueError, match=expected):
         DummySubtractor().apply(_frame())
+
+
+def test_reset_is_callable_and_returns_none():
+    """The base contract asks nothing of reset beyond being callable."""
+    assert RecordingSubtractor().reset() is None
+
+
+def test_reset_discards_accumulated_state():
+    """A stateful subtractor can clear its model without being rebuilt."""
+
+    class CountingSubtractor(_Subtractor):
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def _apply(self, frame: Frame) -> Frame:
+            self.calls += 1
+            return np.full(frame.shape[:2], self.calls, dtype=np.uint8)
+
+        def reset(self) -> None:
+            self.calls = 0
+
+    subtractor = CountingSubtractor()
+    frame = _frame(2, 2)
+
+    subtractor.apply(frame)
+    subtractor.apply(frame)
+    subtractor.reset()
+    after_reset = subtractor.apply(frame)
+
+    assert subtractor.calls == 1
+    np.testing.assert_array_equal(after_reset, np.full((2, 2), 1, dtype=np.uint8))
+
+
+def test_reset_does_not_prevent_further_use():
+    """apply still validates and delegates normally after a reset."""
+    subtractor = RecordingSubtractor()
+
+    subtractor.reset()
+    mask = subtractor.apply(_frame(3, 7))
+
+    assert subtractor.called
+    assert mask.shape == (3, 7)
