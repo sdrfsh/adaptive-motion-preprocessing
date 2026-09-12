@@ -2,13 +2,13 @@ import numpy as np
 import pytest
 
 from amprep import (
-    AdaptiveMotionPreprocessor,
     BackgroundSubtractor,
     Frame,
     KNNBackgroundSubtractor,
     MedianNoiseReducer,
     NoiseReducer,
 )
+from amprep.preprocessor import AdaptiveMotionPreprocessor
 
 
 def _frame(height: int = 8, width: int = 8) -> Frame:
