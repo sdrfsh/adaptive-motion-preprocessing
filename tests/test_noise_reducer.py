@@ -110,3 +110,17 @@ def test_apply_rejects_non_uint8_output():
 
     with pytest.raises(TypeError, match="uint8"):
         DummyReducer().apply(frame)
+
+
+def test_apply_rejects_shape_changing_output():
+    """The public apply method requires _apply to preserve frame shape."""
+
+    class DummyReducer(NoiseReducer):
+        def _apply(self, frame: Frame) -> Frame:
+            return frame[::2, ::2]
+
+    frame = np.zeros((64, 64, 3), dtype=np.uint8)
+    expected = r"preserve shape: \(64, 64, 3\) -> \(32, 32, 3\)"
+
+    with pytest.raises(ValueError, match=expected):
+        DummyReducer().apply(frame)

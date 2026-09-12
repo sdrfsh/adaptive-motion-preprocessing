@@ -5,15 +5,25 @@ import numpy as np
 from amprep.types import Frame
 
 
+def _validate(frame: Frame, label: str) -> None:
+    """Raise ``TypeError`` when ``frame`` is not a valid video frame."""
+    if not isinstance(frame, np.ndarray):
+        raise TypeError(f"Expected {label} to be a NumPy array, got {type(frame)}")
+    if frame.dtype != np.uint8:
+        raise TypeError(f"Expected {label} to be uint8, got {frame.dtype}")
+
+
 class NoiseReducer(ABC):
     """Removes sensor noise from a frame before background subtraction.
 
-    Subclass this to plug in your own denoising. Pass an instance to
+    Subclass this and implement ``_apply`` to plug in your own denoising.
+    Do not override ``apply`` — it validates the input and the returned
+    frame against the contract below. Pass an instance to
     ``AdaptiveMotionPreprocessor(noise_reducer=...)``; leave it unset and
     the package's default implementation is used instead.
 
     Contract:
-        ``apply`` must return a frame with the **same shape and dtype**
+        ``_apply`` must return a frame with the **same shape and dtype**
         as its input — ``uint8``, ``(H, W, 3)``, BGR. Downstream stages
         size their buffers from the first frame they see, so a stage that
         changes shape mid-stream breaks them silently.
@@ -32,16 +42,14 @@ class NoiseReducer(ABC):
 
     def apply(self, frame: Frame) -> Frame:
         """Return a denoised copy of ``frame``."""
-        if not isinstance(frame, np.ndarray):
-            raise TypeError(f"Expected a NumPy array, got {type(frame)}")
-        if frame.dtype != np.uint8:
-            raise TypeError(f"Expected uint8 frame, got {frame.dtype}")
+        _validate(frame, "the input frame")
 
         result = self._apply(frame)
 
-        if not isinstance(result, np.ndarray):
-            raise TypeError(f"Expected a NumPy array, got {type(result)}")
-        if result.dtype != np.uint8:
-            raise TypeError(f"Expected uint8 frame, got {result.dtype}")
+        _validate(result, "the frame returned by _apply")
+        if result.shape != frame.shape:
+            raise ValueError(
+                f"_apply must preserve shape: {frame.shape} -> {result.shape}"
+            )
 
         return result
