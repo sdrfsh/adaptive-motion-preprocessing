@@ -19,14 +19,6 @@ class NoiseReducer(ABC):
         changes shape mid-stream breaks them silently.
     """
 
-    @staticmethod
-    def validate_frame(frame: Frame) -> None:
-        """Raise ``TypeError`` when ``frame`` is not a valid video frame."""
-        if not isinstance(frame, np.ndarray):
-            raise TypeError(f"Expected a NumPy array, got {type(frame)}")
-        if frame.dtype != np.uint8:
-            raise TypeError(f"Expected uint8 frame, got {frame.dtype}")
-
     @abstractmethod
     def _apply(self, frame: Frame) -> Frame:
         """Return a denoised copy of ``frame``.
@@ -37,18 +29,19 @@ class NoiseReducer(ABC):
         Returns:
             A frame of the same shape and dtype as the input.
         """
-        pass
 
     def apply(self, frame: Frame) -> Frame:
-        """Return a denoised copy of ``frame``.
+        """Return a denoised copy of ``frame``."""
+        if not isinstance(frame, np.ndarray):
+            raise TypeError(f"Expected a NumPy array, got {type(frame)}")
+        if frame.dtype != np.uint8:
+            raise TypeError(f"Expected uint8 frame, got {frame.dtype}")
 
-        Args:
-            frame: The frame to denoise. See ``Frame`` for its contract.
-
-        Returns:
-            A frame of the same shape and dtype as the input.
-        """
-        self.validate_frame(frame)
         result = self._apply(frame)
-        self.validate_frame(result)
+
+        if not isinstance(result, np.ndarray):
+            raise TypeError(f"Expected a NumPy array, got {type(result)}")
+        if result.dtype != np.uint8:
+            raise TypeError(f"Expected uint8 frame, got {result.dtype}")
+
         return result

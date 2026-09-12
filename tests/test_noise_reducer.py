@@ -20,28 +20,40 @@ def test_noise_reducer_apply_is_abstract():
         DummyReducer()
 
 
+class RecordingReducer(NoiseReducer):
+    """A reducer that returns a valid frame and records whether it ran.
+
+    Returning a valid frame keeps the output checks quiet, so a rejection
+    is attributable to the input checks alone.
+    """
+
+    def __init__(self) -> None:
+        self.called = False
+
+    def _apply(self, frame: Frame) -> Frame:
+        self.called = True
+        return np.zeros((64, 64, 3), dtype=np.uint8)
+
+
 def test_apply_rejects_non_array_input():
     """The public apply method rejects values that are not NumPy arrays."""
-
-    class DummyReducer(NoiseReducer):
-        def _apply(self, frame: Frame) -> Frame:
-            return frame
+    reducer = RecordingReducer()
 
     with pytest.raises(TypeError, match="NumPy array"):
-        DummyReducer().apply("not a frame")
+        reducer.apply("not a frame")
+
+    assert not reducer.called
 
 
 def test_apply_rejects_non_uint8_input():
     """The public apply method requires uint8 input data."""
-
-    class DummyReducer(NoiseReducer):
-        def _apply(self, frame: Frame) -> Frame:
-            return frame
-
+    reducer = RecordingReducer()
     frame = np.zeros((64, 64, 3), dtype=np.float32)
 
     with pytest.raises(TypeError, match="uint8"):
-        DummyReducer().apply(frame)
+        reducer.apply(frame)
+
+    assert not reducer.called
 
 
 def test_apply_accepts_valid_frame():
@@ -98,24 +110,3 @@ def test_apply_rejects_non_uint8_output():
 
     with pytest.raises(TypeError, match="uint8"):
         DummyReducer().apply(frame)
-
-
-def test_validate_frame_accepts_valid_frame():
-    """validate_frame accepts a NumPy uint8 array."""
-    frame = np.zeros((64, 64, 3), dtype=np.uint8)
-
-    assert NoiseReducer.validate_frame(frame) is None
-
-
-def test_validate_frame_rejects_non_array():
-    """validate_frame rejects values that are not NumPy arrays."""
-    with pytest.raises(TypeError, match="NumPy array"):
-        NoiseReducer.validate_frame("not a frame")
-
-
-def test_validate_frame_rejects_wrong_dtype():
-    """validate_frame rejects arrays that are not uint8."""
-    frame = np.zeros((64, 64, 3), dtype=np.float32)
-
-    with pytest.raises(TypeError, match="uint8"):
-        NoiseReducer.validate_frame(frame)
