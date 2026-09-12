@@ -66,7 +66,8 @@ class BackgroundSubtractor(ABC):
         Called when the scene changes — a cut, a camera move, or the
         start of a different video — so that state accumulated from the
         preceding frames does not leak into the next one. Implementations
-        that hold no state between frames may leave this empty.
+        that hold no state between frames should implement this as a
+        no-op.
         """
 
     def apply(self, frame: Frame) -> Frame:
