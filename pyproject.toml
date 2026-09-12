@@ -29,7 +29,6 @@ src = ["src"]
 select = ["E", "F", "I", "UP", "B", "SIM"]
 ignore = ["E501"]
 
-
 [tool.ruff.format]
 quote-style = "double"
 
