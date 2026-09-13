@@ -498,8 +498,8 @@ def test_warmup_frames_is_a_property_not_a_method():
     )
 
 
-def test_knn_declares_a_warmup():
-    """KNN needs a few frames of samples before its masks mean anything."""
+def test_knn_warmup_frames_defaults_to_four():
+    """Unasked, KNN declares the warmup its default threshold needs."""
     assert KNNBackgroundSubtractor().warmup_frames == 4
 
 
@@ -528,3 +528,30 @@ def test_knn_warmup_is_long_enough_to_settle():
         subtractor.apply(background)
 
     assert not subtractor.apply(background).any()
+
+
+@pytest.mark.parametrize("warmup", [-1, 4.0, "4", True, False, None])
+def test_knn_rejects_invalid_warmup_frames(warmup):
+    """A warmup that is not a count of frames fails at construction."""
+    with pytest.raises(ValueError, match="warmup_frames must be a non-negative"):
+        KNNBackgroundSubtractor(warmup_frames=warmup)
+
+
+def test_knn_accepts_zero_warmup_frames():
+    """Zero is a real choice, not a missing value: trust the first mask."""
+    assert KNNBackgroundSubtractor(warmup_frames=0).warmup_frames == 0
+
+
+def test_knn_warmup_frames_can_be_raised_for_a_strict_threshold():
+    """A stricter threshold needs a longer warmup, and the caller sets it."""
+    subtractor = KNNBackgroundSubtractor(dist2_threshold=100.0, warmup_frames=5)
+
+    assert subtractor.warmup_frames == 5
+
+
+def test_knn_warmup_frames_is_not_passed_to_opencv():
+    """It describes the model rather than configuring it."""
+    subtractor = KNNBackgroundSubtractor(warmup_frames=9)
+
+    assert subtractor.warmup_frames == 9
+    assert subtractor.apply(_frame()).shape == (64, 64)
