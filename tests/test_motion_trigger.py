@@ -128,6 +128,22 @@ def test_falls_back_to_idle_when_the_motion_stops():
     assert trigger.is_active is False
 
 
+def test_rearms_for_the_next_burst():
+    """A second burst is caught like the first, with no reset in between.
+
+    Going quiet must not latch the trigger shut: each mask is judged on
+    its own, so activity that stops and starts again is reported every
+    time. This is what a cooldown added later would break, which is why
+    the whole idle-active-idle-active run is pinned rather than a single
+    transition.
+    """
+    trigger = MotionTrigger(threshold=0.05)
+
+    states = [trigger.update(_mask(n)) for n in (0, 20, 20, 0, 0, 20, 0)]
+
+    assert states == [False, True, True, False, False, True, False]
+
+
 def test_reset_returns_to_idle():
     """Reset discards the verdict as well as the measurement."""
     trigger = MotionTrigger(threshold=0.05)
