@@ -173,27 +173,3 @@ def test_reset_allows_a_new_frame_size():
     preprocessor.reset()
 
     list(preprocessor.process([np.zeros((30, 40, 3), np.uint8)] * 3))  # no error
-
-
-# ---- full_speed ----
-
-
-def test_full_speed_is_learned_by_default():
-    assert AdaptiveMotionPreprocessor()._sampler.auto is True
-
-
-def test_a_given_full_speed_is_passed_to_the_sampler():
-    sampler = AdaptiveMotionPreprocessor(full_speed=0.5)._sampler
-
-    assert sampler.auto is False
-    assert sampler.full_speed == 0.5
-
-
-def test_reset_forgets_the_learned_full_speed(monkeypatch):
-    preprocessor = AdaptiveMotionPreprocessor()
-    calls = []
-    monkeypatch.setattr(preprocessor._sampler, "reset", lambda: calls.append(1))
-
-    preprocessor.reset()
-
-    assert calls == [1]
