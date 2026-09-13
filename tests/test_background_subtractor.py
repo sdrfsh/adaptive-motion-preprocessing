@@ -451,3 +451,61 @@ def test_knn_relearns_after_reset():
 
     assert mask[8:24, 8:24].all()
     assert not mask[:8].any()
+
+
+def test_warmup_frames_defaults_to_zero():
+    """A subclass that says nothing is taken to be useful immediately."""
+
+    class DummySubtractor(_Subtractor):
+        def _apply(self, frame: Frame) -> Frame:
+            return np.zeros(frame.shape[:2], dtype=np.uint8)
+
+    assert DummySubtractor().warmup_frames == 0
+
+
+def test_warmup_frames_is_concrete_on_the_abc():
+    """The property is not abstract: omitting it does not block a subclass."""
+
+    class DummySubtractor(_Subtractor):
+        def _apply(self, frame: Frame) -> Frame:
+            return np.zeros(frame.shape[:2], dtype=np.uint8)
+
+    DummySubtractor()  # would raise TypeError if warmup_frames were abstract
+
+    assert "warmup_frames" not in BackgroundSubtractor.__abstractmethods__
+
+
+def test_warmup_frames_can_be_overridden():
+    """A subtractor that needs settling time says so, and is believed."""
+
+    class SlowSubtractor(_Subtractor):
+        @property
+        def warmup_frames(self) -> int:
+            return 12
+
+        def _apply(self, frame: Frame) -> Frame:
+            return np.zeros(frame.shape[:2], dtype=np.uint8)
+
+    assert SlowSubtractor().warmup_frames == 12
+
+
+def test_warmup_frames_is_a_property_not_a_method():
+    """Reading it gives the count itself, not something to call."""
+    assert isinstance(KNNBackgroundSubtractor().warmup_frames, int)
+    assert isinstance(
+        type(KNNBackgroundSubtractor()).warmup_frames,
+        property,
+    )
+
+
+def test_knn_declares_a_warmup():
+    """KNN needs a few frames of samples before its masks mean anything."""
+    assert KNNBackgroundSubtractor().warmup_frames == 4
+
+
+def test_knn_warmup_survives_reset():
+    """Warmup is a property of the algorithm, not of the current model."""
+    subtractor = KNNBackgroundSubtractor()
+    subtractor.reset()
+
+    assert subtractor.warmup_frames == 4

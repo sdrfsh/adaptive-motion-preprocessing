@@ -45,6 +45,11 @@ class BackgroundSubtractor(ABC):
         of saying the next frame belongs to a different scene, so a model
         learned from the preceding frames describes a background that is
         no longer there.
+
+        ``warmup_frames`` says how many frames a subtractor needs before
+        its masks mean anything. It is concrete and defaults to 0, so a
+        subclass that is useful from its first frame writes nothing;
+        override it only if yours is not.
     """
 
     @abstractmethod
@@ -70,6 +75,11 @@ class BackgroundSubtractor(ABC):
         that hold no state between frames should implement this as a
         no-op.
         """
+
+    @property
+    def warmup_frames(self) -> int:
+        """Frames before this subtractor's masks are meaningful. Default 0."""
+        return 0
 
     def apply(self, frame: Frame) -> Frame:
         """Return the foreground mask for ``frame``."""
@@ -150,6 +160,17 @@ class KNNBackgroundSubtractor(BackgroundSubtractor):
             dist2Threshold=self._dist2_threshold,
             detectShadows=self._detect_shadows,
         )
+
+    @property
+    def warmup_frames(self) -> int:
+        """Frames before KNN's masks are meaningful.
+
+        KNN calls a pixel foreground when too few of its recent samples
+        sit close to the new value, so on the opening frames it has too
+        few samples to judge against and marks most of the image as
+        motion. Four is where that settles in practice.
+        """
+        return 4
 
     def _apply(self, frame: Frame) -> Frame:
         mask = self._subtractor.apply(frame)
