@@ -53,9 +53,10 @@ class Window:
     """A full run of consecutive frames, collected while motion lasted.
 
     The handover between the collector and the two stages that read it:
-    the adaptive sampler measures how fast things moved from ``frames``,
-    and the encoder draws silhouettes from ``masks``. Both are carried
-    because neither can be recovered from the other, and they are carried
+    the adaptive sampler measures how fast things moved from ``masks``,
+    where the foreground centroid is trivially locatable, and the encoder
+    stacks the ``frames`` the sampler picked. Both are carried because
+    neither can be recovered from the other, and they are carried
     together because a mask is only meaningful beside the frame it came
     from.
 
