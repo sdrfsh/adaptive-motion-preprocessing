@@ -13,8 +13,18 @@ from pathlib import Path
 import cv2
 import numpy as np
 
+from amprep import MotionImage
+
 ROOT = Path(__file__).resolve().parent.parent
 EXAMPLES = ROOT / "examples"
+
+
+def _load(script: str):
+    """Import an example as a module, without running its ``__main__``."""
+    spec = importlib.util.spec_from_file_location(Path(script).stem, EXAMPLES / script)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def _run(script: str, *args: str) -> subprocess.CompletedProcess[str]:
@@ -28,22 +38,16 @@ def _run(script: str, *args: str) -> subprocess.CompletedProcess[str]:
 
 def test_readme_frames_from_is_the_example_verbatim():
     """Copied by hand, so this is what stops the two drifting apart."""
-    spec = importlib.util.spec_from_file_location(
-        "from_video_file", EXAMPLES / "from_video_file.py"
-    )
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-
-    snippet = inspect.getsource(module.frames_from)
+    snippet = inspect.getsource(_load("from_video_file.py").frames_from)
 
     assert snippet in (ROOT / "README.md").read_text(encoding="utf-8")
 
 
-def test_readme_links_both_examples():
+def test_readme_links_every_example():
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
 
-    assert "(examples/from_video_file.py)" in readme
-    assert "(examples/custom_background_subtractor.py)" in readme
+    for script in sorted(EXAMPLES.glob("*.py")):
+        assert f"(examples/{script.name})" in readme
 
 
 def test_from_video_file_prints_a_shape_per_motion_image(tmp_path):
@@ -84,3 +88,28 @@ def test_custom_background_subtractor_runs_both_pipelines():
     assert result.returncode == 0, result.stderr
     assert "FrameDifferenceSubtractor" in result.stdout
     assert "shape (120, 240), dtype uint8" in result.stdout
+
+
+def test_live_camera_starts_without_a_camera():
+    """No webcam in CI, so ``--help`` proves the imports and arguments."""
+    result = _run("live_camera.py", "--help")
+
+    assert result.returncode == 0, result.stderr
+    assert "--window-frames" in result.stdout
+
+
+def test_live_camera_shows_the_camera_and_motion_image_side_by_side():
+    """The drawing half of the live example, checked without a window."""
+    live = _load("live_camera.py")
+    frame = np.full((48, 64, 3), 90, dtype=np.uint8)
+    image = MotionImage(data=np.full((48, 64), 255, np.uint8), frame_indices=(6, 9))
+
+    waiting = live.compose(frame, None, 0)
+    showing = live.compose(frame, image, 1)
+
+    assert waiting.shape == showing.shape == (48, 128, 3)
+    # Below the caption bar, the right half is the motion image itself.
+    assert (waiting[40:, 64:] == 0).all()
+    assert (showing[40:, 64:] == 255).all()
+    # The camera frame is copied, not drawn on.
+    assert (frame == 90).all()

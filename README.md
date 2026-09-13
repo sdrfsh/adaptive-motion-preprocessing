@@ -44,6 +44,21 @@ for image in AdaptiveMotionPreprocessor().process(frames_from("clip.mp4")):
     print(image.data.shape)
 ```
 
+## 🎥 Try it on your webcam
+
+See your camera and the motion images side by side, live:
+
+```sh
+git clone https://github.com/sdrfsh/adaptive-motion-preprocessing
+cd adaptive-motion-preprocessing
+pip install -e .
+python examples/live_camera.py
+```
+
+Stay out of shot for a second while it learns the background, then move.
+Press `q` or `Esc` to quit. Add `--camera 1` for an external webcam, or
+`--threshold 0.03` if it triggers when nothing is moving.
+
 ## ⚙️ Settings
 
 All optional keyword arguments of `AdaptiveMotionPreprocessor(...)`:
@@ -74,5 +89,6 @@ All optional keyword arguments of `AdaptiveMotionPreprocessor(...)`:
 
 ## 📚 Examples
 
+- [examples/live_camera.py](examples/live_camera.py): watch it live on your webcam, camera and motion image side by side
 - [examples/from_video_file.py](examples/from_video_file.py): run it on a video file
 - [examples/custom_background_subtractor.py](examples/custom_background_subtractor.py): plug in your own stage
