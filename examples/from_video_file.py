@@ -7,7 +7,7 @@ Prints the shape of each motion image the moment it is produced.
 
 Reading video is the caller's job: the package takes any iterable of
 ``uint8`` BGR frames and never opens a file or camera itself. ``frames_from``
-below is the few lines that bridge the two. Keep its ``try``/``finally`` —
+below is the few lines that bridge the two. Keep its ``try``/``finally``:
 without it the capture handle leaks whenever the loop is left early.
 """
 

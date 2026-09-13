@@ -38,7 +38,7 @@ class FrameWindowCollector:
 
     A partial window is discarded when motion stops. Velocity is measured
     across a window, so a window cut short describes a slower movement
-    than actually happened — a stage cannot tell "the object slowed" from
+    than actually happened: a stage cannot tell "the object slowed" from
     "the recording stopped". Dropping the remainder loses a fragment of
     real motion; keeping it would report a false one, which is worse.
 

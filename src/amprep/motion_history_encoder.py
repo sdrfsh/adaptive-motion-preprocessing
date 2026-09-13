@@ -22,16 +22,18 @@ class MotionHistoryEncoder:
     came from.
 
     Size is the caller's business. Given no size the masks are painted at
-    the size they arrive in, untouched — a 100x200 source yields a
+    the size they arrive in, untouched: a 100x200 source yields a
     100x200 image, and a model built for that source needs nothing done
     to it. The shape stays fixed across windows because the source
     resolution does, not because anything here enforces it.
 
     Give a size and every mask is scaled to it instead, for a model whose
     input differs from the camera. Scaling uses ``INTER_AREA``, which
-    averages the pixels it merges rather than picking one of them: a
-    subject two pixels wide survives a large reduction as a faint value
-    instead of disappearing at most positions.
+    averages the pixels it merges rather than picking one of them, so a
+    subject two pixels wide still leaves a small nonzero value after a
+    large reduction instead of disappearing at most positions. Any
+    nonzero mask pixel counts as foreground, so that value is painted at
+    its frame's full brightness, not dimmed by the averaging.
 
     Args:
         width: Output width in pixels, or ``None`` to keep the source

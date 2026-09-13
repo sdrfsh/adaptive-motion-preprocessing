@@ -11,7 +11,7 @@ DEFAULT_SAMPLE_FRAMES = 4
 
 Fixed on purpose. The encoder behind this stage has to emit one shape
 every time, and a constant number of frames going in is the cheapest way
-to get there — it has nothing to pad or drop. Keep it at or below
+to get there: it has nothing to pad or drop. Keep it at or below
 ``window_frames`` or short windows will yield fewer.
 """
 
@@ -53,7 +53,7 @@ class AdaptiveFrameSampler:
     fixed count buys: with a constant number of frames, coverage and
     density cannot both be held. Density is what carries the shape of the
     movement, and when it has to be bought, it is bought from the oldest
-    frames rather than the freshest — the samples always reach the most
+    frames rather than the freshest: the samples always reach the most
     recent frame in the window.
 
     Velocity is read from the masks rather than the frames: a mask is
@@ -110,7 +110,7 @@ class AdaptiveFrameSampler:
         For each pair of consecutive masks, the share of the subject that
         flipped between them: pixels that changed, over pixels foreground
         in either. The result is the mean of those shares, so it stays in
-        ``[0, 1]`` whatever the window length or the resolution — an
+        ``[0, 1]`` whatever the window length or the resolution: an
         average over pairs rather than a total divided by the number of
         steps, which would shrink as the window grew.
 

@@ -88,8 +88,8 @@ def test_noise_reducer_subclass_completes_in_one_step():
 def test_partly_implemented_base_stays_abstract_until_a_child_finishes_it():
     """A half-done intermediate class is rejected; its completed child is not.
 
-    Subclassing in two steps — a base that fixes ``reset`` and children
-    that vary ``_apply`` — is a reasonable thing for a user to do, so the
+    Subclassing in two steps (a base that fixes ``reset`` and children
+    that vary ``_apply``) is a reasonable thing for a user to do, so the
     enforcement has to survive a hierarchy rather than only a direct
     subclass.
     """

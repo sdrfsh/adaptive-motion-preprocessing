@@ -18,14 +18,14 @@ class NoiseReducer(ABC):
     """Removes sensor noise from a frame before background subtraction.
 
     Subclass this and implement ``_apply`` to plug in your own denoising.
-    Do not override ``apply`` — it validates the input and the returned
+    Do not override ``apply``: it validates the input and the returned
     frame against the contract below. Pass an instance to
     ``AdaptiveMotionPreprocessor(noise_reducer=...)``; leave it unset and
     the package's default implementation is used instead.
 
     Contract:
         ``_apply`` must return a frame with the **same shape and dtype**
-        as its input — ``uint8``, ``(H, W, 3)``, BGR. Downstream stages
+        as its input: ``uint8``, ``(H, W, 3)``, BGR. Downstream stages
         size their buffers from the first frame they see, so a stage that
         changes shape mid-stream breaks them silently.
     """
@@ -61,7 +61,7 @@ class MedianNoiseReducer(NoiseReducer):
 
     The package default. A median discards extreme pixel values instead
     of averaging them in, which suits the salt-and-pepper noise that
-    would otherwise become phantom foreground in the mask — and it blurs
+    would otherwise become phantom foreground in the mask, and it blurs
     edges far less than a Gaussian, so the silhouette the sampler and
     encoder depend on stays sharp.
 

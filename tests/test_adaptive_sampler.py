@@ -22,7 +22,7 @@ FASTEST_PX = 14
 
 ``(WIDTH - BOX - 10) / 9`` is 14.4, so anything above this parks against
 the right wall part-way through and the rest of the window is a subject
-standing still — a property of the scaffold, not of the sampler.
+standing still: a property of the scaffold, not of the sampler.
 """
 
 
@@ -217,8 +217,8 @@ def test_flickering_noise_inflates_the_reading():
     Noise that lands somewhere new each frame is change, and this
     measures change, so it reads as motion. A still scene under heavy
     flicker can read faster than a walking one under none. The defence
-    is upstream — the noise reducer and the subtractor exist to remove
-    this before it arrives — so this test documents the exposure rather
+    is upstream (the noise reducer and the subtractor exist to remove
+    this before it arrives), so this test documents the exposure rather
     than asserting it is handled here.
     """
     sampler = AdaptiveFrameSampler()

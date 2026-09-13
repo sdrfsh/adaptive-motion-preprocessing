@@ -5,7 +5,8 @@ import numpy as np
 import pytest
 
 import amprep
-from amprep import AdaptiveMotionPreprocessor, Frame, NoiseReducer
+from amprep import AdaptiveMotionPreprocessor, BackgroundSubtractor, Frame, NoiseReducer
+from amprep.frame_window import DEFAULT_WINDOW_FRAMES
 
 FRAME_SIZE = (8, 8, 3)
 """Small enough to be cheap, large enough to satisfy the frame contract."""
@@ -39,9 +40,9 @@ class FrameIterator:
 class CountingReducer(NoiseReducer):
     """A reducer that passes frames through and counts them.
 
-    Nothing reaches the output of the pipeline yet, so the number of
-    frames that reached the first stage is what the input-side tests
-    measure instead.
+    The input-side tests count frames at the first stage rather than
+    images at the output. Every frame is counted whether or not it ends up
+    in a motion image, and the tiny uniform frames used here produce none.
     """
 
     def __init__(self) -> None:
@@ -127,7 +128,7 @@ def test_frames_are_consumed_one_at_a_time():
     """The stream is processed as it is pulled, never drained up front.
 
     A count of frames pulled cannot tell "read all three, then process
-    all three" apart from "read one, process one, three times" — both end
+    all three" apart from "read one, process one, three times": both end
     at three. The order the two interleave can, so the pulls and the
     stage calls are recorded into one log and the strict alternation is
     asserted.
@@ -158,14 +159,11 @@ def test_frames_are_consumed_one_at_a_time():
 
 
 def test_an_endless_stream_is_untouched_until_it_is_iterated():
-    """An unbounded input neither hangs nor reads ahead of demand.
+    """An unbounded input is not touched until it is asked for.
 
-    The stronger property — consuming an endless stream part way and
-    walking away — cannot be asserted yet: with no encoder behind it
-    ``process`` yields nothing, so any attempt to take "the first few"
-    outputs would consume the input forever. What is testable now is
-    that handing over an endless source costs nothing until it is asked
-    for, which is the half that makes a live camera safe to pass in.
+    Handing over a live camera must cost nothing up front. The other half,
+    consuming an endless stream part way and walking away, is the next
+    test.
     """
     pulled = 0
 
@@ -185,12 +183,52 @@ def test_an_endless_stream_is_untouched_until_it_is_iterated():
     assert reducer.calls == 0
 
 
+class _AllForeground(BackgroundSubtractor):
+    """Every pixel moving on every frame, so each window fills at once."""
+
+    def _apply(self, frame: Frame) -> Frame:
+        return np.full(frame.shape[:2], 255, np.uint8)
+
+    def reset(self) -> None:
+        pass
+
+
+def test_an_endless_stream_can_be_consumed_part_way_and_abandoned():
+    """Take one image from an endless source, walk away, and nothing hangs.
+
+    Every frame reads as motion, so the first image is due after exactly
+    ``window_frames`` frames. The pull count shows nothing was read ahead,
+    and closing the pipeline closes the source too, which is what lets a
+    ``try``/``finally`` around a camera release it.
+    """
+    pulled = 0
+    released = False
+
+    def endless_frames() -> Iterator[Frame]:
+        nonlocal pulled, released
+        try:
+            while True:
+                pulled += 1
+                yield _frame()
+        finally:
+            released = True
+
+    preprocessor = AdaptiveMotionPreprocessor(background_subtractor=_AllForeground())
+    images = preprocessor.process(endless_frames())
+
+    next(images)
+    images.close()
+
+    assert pulled == DEFAULT_WINDOW_FRAMES
+    assert released
+
+
 def test_the_package_does_no_video_io():
     """No module under ``src/amprep/`` opens or writes video itself.
 
     Reading and writing video is the caller's job, so the package must
     not quietly grow a capture of its own. ``cv2`` stays available for
-    the filters themselves — this looks only for the I/O entry points.
+    the filters themselves; this looks only for the I/O entry points.
     """
     package = Path(amprep.__file__).parent
 

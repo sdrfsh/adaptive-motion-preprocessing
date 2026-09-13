@@ -17,8 +17,8 @@ class AdaptiveMotionPreprocessor:
 
     Every stage argument defaults to ``None``, which is replaced here
     with the packaged implementation of that stage. Resolving the
-    default inside ``__init__`` — rather than behind a factory or at the
-    first frame — means an assembled preprocessor always holds real
+    default inside ``__init__`` (rather than behind a factory or at the
+    first frame) means an assembled preprocessor always holds real
     stage objects, so there is no second code path in which a stage is
     still missing.
 
@@ -92,18 +92,18 @@ class AdaptiveMotionPreprocessor:
         """Turn a stream of frames into encoded motion images.
 
         The input side of the pipeline, and the whole of it: the package
-        does no video I/O. Any iterable of frames is accepted — a list, a
+        does no video I/O. Any iterable of frames is accepted (a list, a
         generator, a custom iterator, a loop around a camera the caller
-        opened — because by the time a frame arrives here it is a
+        opened) because by the time a frame arrives here it is a
         ``uint8`` BGR array, and where it came from is neither recoverable
         nor needed. Capture stays outside the package on purpose: nothing
         in here owns a device handle, so nothing in here can leak one.
         The README carries the few lines that read frames from a file.
 
         The stream is consumed lazily, one frame at a time, and is never
-        materialised. An unbounded source is therefore fine — a live
+        materialised. An unbounded source is therefore fine: a live
         camera can be handed over and abandoned whenever the caller
-        likes — and because this is a generator it does not touch the
+        likes. Because this is a generator, it does not touch the
         input at all until it is iterated.
 
         Frames must arrive in capture order. The stages behind this one
