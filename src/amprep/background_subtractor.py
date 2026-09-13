@@ -45,6 +45,11 @@ class BackgroundSubtractor(ABC):
         of saying the next frame belongs to a different scene, so a model
         learned from the preceding frames describes a background that is
         no longer there.
+
+        ``warmup_frames`` says how many frames a subtractor needs before
+        its masks mean anything. It is concrete and defaults to 0, so a
+        subclass that is useful from its first frame writes nothing;
+        override it only if yours is not.
     """
 
     @abstractmethod
@@ -70,6 +75,11 @@ class BackgroundSubtractor(ABC):
         that hold no state between frames should implement this as a
         no-op.
         """
+
+    @property
+    def warmup_frames(self) -> int:
+        """Frames before this subtractor's masks are meaningful. Default 0."""
+        return 0
 
     def apply(self, frame: Frame) -> Frame:
         """Return the foreground mask for ``frame``."""
@@ -115,6 +125,14 @@ class KNNBackgroundSubtractor(BackgroundSubtractor):
             leaving this on keeps them out of the silhouette at a modest
             cost in speed. Turn it off and they are foreground like any
             other change.
+        warmup_frames: Frames to ignore at the start, while the model
+            has too few samples to judge against and marks most of the
+            image as motion. 4 settles a clean source at the default
+            ``dist2_threshold``. A strict threshold needs more, and how
+            much more is set by how far the source itself flickers rather
+            than by the threshold alone: at 100 a lightly noisy scene
+            takes 5, while a threshold strict enough for its own noise
+            never settles and reads every frame as motion.
     """
 
     def __init__(
@@ -122,6 +140,7 @@ class KNNBackgroundSubtractor(BackgroundSubtractor):
         history: int = 500,
         dist2_threshold: float = 400.0,
         detect_shadows: bool = True,
+        warmup_frames: int = 4,
     ) -> None:
         if not isinstance(history, int) or isinstance(history, bool) or history <= 0:
             raise ValueError(f"history must be a positive integer, got {history!r}")
@@ -137,10 +156,21 @@ class KNNBackgroundSubtractor(BackgroundSubtractor):
             raise ValueError(
                 f"detect_shadows must be a boolean, got {detect_shadows!r}"
             )
+        # Zero is allowed, and means the very first mask is trusted; only
+        # a negative count is meaningless.
+        if (
+            not isinstance(warmup_frames, int)
+            or isinstance(warmup_frames, bool)
+            or warmup_frames < 0
+        ):
+            raise ValueError(
+                f"warmup_frames must be a non-negative integer, got {warmup_frames!r}"
+            )
 
         self._history = history
         self._dist2_threshold = float(dist2_threshold)
         self._detect_shadows = detect_shadows
+        self._warmup_frames = warmup_frames
         self._subtractor = self._build()
 
     def _build(self) -> cv2.BackgroundSubtractorKNN:
@@ -150,6 +180,11 @@ class KNNBackgroundSubtractor(BackgroundSubtractor):
             dist2Threshold=self._dist2_threshold,
             detectShadows=self._detect_shadows,
         )
+
+    @property
+    def warmup_frames(self) -> int:
+        """Frames to ignore at the start, as given to the constructor."""
+        return self._warmup_frames
 
     def _apply(self, frame: Frame) -> Frame:
         mask = self._subtractor.apply(frame)

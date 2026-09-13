@@ -451,3 +451,107 @@ def test_knn_relearns_after_reset():
 
     assert mask[8:24, 8:24].all()
     assert not mask[:8].any()
+
+
+def test_warmup_frames_defaults_to_zero():
+    """A subclass that says nothing is taken to be useful immediately."""
+
+    class DummySubtractor(_Subtractor):
+        def _apply(self, frame: Frame) -> Frame:
+            return np.zeros(frame.shape[:2], dtype=np.uint8)
+
+    assert DummySubtractor().warmup_frames == 0
+
+
+def test_warmup_frames_is_concrete_on_the_abc():
+    """The property is not abstract: omitting it does not block a subclass."""
+
+    class DummySubtractor(_Subtractor):
+        def _apply(self, frame: Frame) -> Frame:
+            return np.zeros(frame.shape[:2], dtype=np.uint8)
+
+    DummySubtractor()  # would raise TypeError if warmup_frames were abstract
+
+    assert "warmup_frames" not in BackgroundSubtractor.__abstractmethods__
+
+
+def test_warmup_frames_can_be_overridden():
+    """A subtractor that needs settling time says so, and is believed."""
+
+    class SlowSubtractor(_Subtractor):
+        @property
+        def warmup_frames(self) -> int:
+            return 12
+
+        def _apply(self, frame: Frame) -> Frame:
+            return np.zeros(frame.shape[:2], dtype=np.uint8)
+
+    assert SlowSubtractor().warmup_frames == 12
+
+
+def test_warmup_frames_is_a_property_not_a_method():
+    """Reading it gives the count itself, not something to call."""
+    assert isinstance(KNNBackgroundSubtractor().warmup_frames, int)
+    assert isinstance(
+        type(KNNBackgroundSubtractor()).warmup_frames,
+        property,
+    )
+
+
+def test_knn_warmup_frames_defaults_to_four():
+    """Unasked, KNN declares the warmup its default threshold needs."""
+    assert KNNBackgroundSubtractor().warmup_frames == 4
+
+
+def test_knn_warmup_survives_reset():
+    """Warmup is a property of the algorithm, not of the current model."""
+    subtractor = KNNBackgroundSubtractor()
+    subtractor.reset()
+
+    assert subtractor.warmup_frames == 4
+
+
+def test_knn_warmup_is_long_enough_to_settle():
+    """The declared warmup is honest: past it, a still scene reads as still.
+
+    KNN judges a pixel against its recent samples, so on the opening
+    frames it has too few to judge with and calls almost everything
+    foreground. This asserts the count is *sufficient* rather than exact
+    — that masks are trustworthy once the warmup is spent — because how
+    many frames it takes to get there is OpenCV's business and could
+    reasonably shift between builds.
+    """
+    background, _ = _scene()
+    subtractor = KNNBackgroundSubtractor()
+
+    for _ in range(subtractor.warmup_frames):
+        subtractor.apply(background)
+
+    assert not subtractor.apply(background).any()
+
+
+@pytest.mark.parametrize("warmup", [-1, 4.0, "4", True, False, None])
+def test_knn_rejects_invalid_warmup_frames(warmup):
+    """A warmup that is not a count of frames fails at construction."""
+    with pytest.raises(ValueError, match="warmup_frames must be a non-negative"):
+        KNNBackgroundSubtractor(warmup_frames=warmup)
+
+
+def test_knn_accepts_zero_warmup_frames():
+    """Zero is a real choice, not a missing value: trust the first mask."""
+    assert KNNBackgroundSubtractor(warmup_frames=0).warmup_frames == 0
+
+
+def test_knn_warmup_frames_can_be_raised_for_a_strict_threshold():
+    """A stricter threshold needs a longer warmup, and the caller sets it."""
+    subtractor = KNNBackgroundSubtractor(dist2_threshold=100.0, warmup_frames=5)
+
+    assert subtractor.warmup_frames == 5
+
+
+def test_knn_warmup_frames_is_not_passed_to_opencv():
+    """It describes the model rather than configuring it."""
+    subtractor = KNNBackgroundSubtractor(warmup_frames=9)
+
+    assert subtractor.warmup_frames == 9
+    assert subtractor.apply(_frame()).shape == (64, 64)
