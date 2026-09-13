@@ -1,13 +1,82 @@
 name: Publish
 
+# Runs on every push to main, but only publishes when pyproject.toml holds a
+# version PyPI does not have yet. PyPI never accepts the same version twice,
+# so a push that does not bump the version is skipped rather than failed.
+# To release: bump `version` in pyproject.toml in a PR, then merge it.
+
 on:
-  release:
-    types: [published]
+  push:
+    branches: [main]
   workflow_dispatch:
 
+# One publish at a time, and never cancel one halfway through an upload.
+concurrency:
+  group: publish
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
 jobs:
+  check-version:
+    name: Check for a new version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      is-new: ${{ steps.version.outputs.is-new }}
+      prerelease: ${{ steps.version.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Compare pyproject.toml with PyPI
+        id: version
+        shell: python
+        run: |
+          import os
+          import re
+          import tomllib
+          import urllib.error
+          import urllib.request
+
+          with open("pyproject.toml", "rb") as file:
+              project = tomllib.load(file)["project"]
+          name, version = project["name"], project["version"]
+
+          try:
+              urllib.request.urlopen(f"https://pypi.org/pypi/{name}/{version}/json")
+              is_new = False
+          except urllib.error.HTTPError as error:
+              if error.code != 404:
+                  raise
+              is_new = True
+
+          prerelease = re.search(r"(a|b|rc|dev)\d*", version) is not None
+
+          with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+              output.write(f"version={version}\n")
+              output.write(f"is-new={str(is_new).lower()}\n")
+              output.write(f"prerelease={str(prerelease).lower()}\n")
+
+          verdict = "new, publishing" if is_new else "already on PyPI, skipping"
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as summary:
+              summary.write(f"**{name} {version}**: {verdict}\n")
+          print(f"{name} {version}: {verdict}")
+
+  ci:
+    name: CI
+    needs: check-version
+    if: needs.check-version.outputs.is-new == 'true'
+    uses: ./.github/workflows/ci.yml
+
   build:
     name: Build distributions
+    needs: [check-version, ci]
+    if: needs.check-version.outputs.is-new == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -32,7 +101,8 @@ jobs:
 
   publish:
     name: Publish to PyPI
-    needs: build
+    needs: [check-version, build]
+    if: needs.check-version.outputs.is-new == 'true'
     runs-on: ubuntu-latest
     environment:
       name: pypi
@@ -47,3 +117,33 @@ jobs:
 
       - name: Publish
         uses: pypa/gh-action-pypi-publish@release/v1
+
+  release:
+    name: Tag and create GitHub release
+    needs: [check-version, publish]
+    if: needs.check-version.outputs.is-new == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write  # create the tag and release
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.check-version.outputs.version }}
+          PRERELEASE: ${{ needs.check-version.outputs.prerelease }}
+        run: |
+          flags=()
+          if [ "$PRERELEASE" = "true" ]; then
+            flags+=(--prerelease)
+          fi
+          gh release create "v$VERSION" dist/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "v$VERSION" \
+            --generate-notes \
+            "${flags[@]}"
