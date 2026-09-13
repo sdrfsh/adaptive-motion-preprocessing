@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "adaptive-motion-preprocessing"
-version = "1.0.0rc1"
+version = "1.0.0rc2"
 description = "Adaptive motion preprocessing: video frames in, encoded motion images out."
 readme = "README.md"
 license = "MIT"
