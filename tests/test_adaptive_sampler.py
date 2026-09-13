@@ -3,155 +3,347 @@ import pytest
 
 from amprep.adaptive_sampler import (
     DEFAULT_FULL_SPEED,
-    DEFAULT_MAX_FRAMES,
-    DEFAULT_MIN_FRAMES,
+    DEFAULT_SAMPLE_FRAMES,
     AdaptiveFrameSampler,
 )
 from amprep.types import Window
 
 HEIGHT, WIDTH = 120, 160
-"""A 120x160 frame has a diagonal of exactly 200px, so a velocity in
-fractions-of-the-diagonal converts to pixels in the head."""
-
 BOX = 20
-DIAGONAL = 200.0
+
+WALKING_PX = 3
+"""Sideways pixels per frame that read as a walk on these synthetic masks."""
+
+RUNNING_PX = 10
+"""Sideways pixels per frame well past ``full_speed``."""
+
+FASTEST_PX = 14
+"""The quickest a box can cross these masks without reaching the edge.
+
+``(WIDTH - BOX - 10) / 9`` is 14.4, so anything above this parks against
+the right wall part-way through and the rest of the window is a subject
+standing still — a property of the scaffold, not of the sampler.
+"""
+
+
+def _window(masks: list[np.ndarray]) -> Window:
+    """Wrap masks in a window, with blank frames the sampler never reads."""
+    blanks = tuple(np.zeros((*mask.shape, 3), np.uint8) for mask in masks)
+    return Window(frames=blanks, masks=tuple(masks))
 
 
 def _moving_window(frames: int, pixels_per_frame: float) -> Window:
-    """A window whose foreground box drifts right at a known speed."""
-    masks, pictures = [], []
+    """A window whose foreground box drifts sideways at a known speed."""
+    masks = []
     for index in range(frames):
         mask = np.zeros((HEIGHT, WIDTH), dtype=np.uint8)
         left = int(round(10 + index * pixels_per_frame))
         left = max(0, min(WIDTH - BOX, left))
         mask[50 : 50 + BOX, left : left + BOX] = 255
         masks.append(mask)
-        pictures.append(np.zeros((HEIGHT, WIDTH, 3), dtype=np.uint8))
-    return Window(frames=tuple(pictures), masks=tuple(masks))
+    return _window(masks)
+
+
+def _approaching_window(frames: int) -> Window:
+    """A subject growing in place, as one walking toward the camera does.
+
+    Its centre never moves, which is exactly the case a centroid-based
+    velocity reads as perfectly still.
+    """
+    masks = []
+    for index in range(frames):
+        size = int(round(BOX * (1 + 0.10 * index)))
+        mask = np.zeros((HEIGHT, WIDTH), dtype=np.uint8)
+        top, left = (HEIGHT - size) // 2, (WIDTH - size) // 2
+        mask[top : top + size, left : left + size] = 255
+        masks.append(mask)
+    return _window(masks)
+
+
+def _two_apart_window(frames: int) -> Window:
+    """Two subjects separating, whose combined centre stays put.
+
+    The second case a centroid cannot see: the halves cancel out.
+    """
+    masks = []
+    for index in range(frames):
+        mask = np.zeros((HEIGHT, WIDTH), dtype=np.uint8)
+        gap = index * 4
+        mask[50 : 50 + BOX, 60 - gap - BOX : 60 - gap] = 255
+        mask[50 : 50 + BOX, 100 + gap : 100 + gap + BOX] = 255
+        masks.append(mask)
+    return _window(masks)
 
 
 def _blank_window(frames: int) -> Window:
     """A window whose masks hold no foreground at all."""
-    return Window(
-        frames=tuple(np.zeros((HEIGHT, WIDTH, 3), np.uint8) for _ in range(frames)),
-        masks=tuple(np.zeros((HEIGHT, WIDTH), np.uint8) for _ in range(frames)),
-    )
+    return _window([np.zeros((HEIGHT, WIDTH), np.uint8) for _ in range(frames)])
+
+
+def _flickering_window(frames: int, pixels_per_frame: float, specks: int) -> Window:
+    """A moving window with noise that lands somewhere new every frame."""
+    rng = np.random.default_rng(1)
+    masks = []
+    for mask in _moving_window(frames, pixels_per_frame).masks:
+        noisy = mask.copy()
+        for _ in range(specks):
+            row, column = rng.integers(0, HEIGHT - 2), rng.integers(0, WIDTH - 2)
+            noisy[row : row + 2, column : column + 2] = 255
+        masks.append(noisy)
+    return _window(masks)
+
+
+def _static_speck_window(frames: int, pixels_per_frame: float, specks: int) -> Window:
+    """A moving window with noise that stays in the same places."""
+    rng = np.random.default_rng(1)
+    points = [
+        (rng.integers(0, HEIGHT - 2), rng.integers(0, WIDTH - 2)) for _ in range(specks)
+    ]
+    masks = []
+    for mask in _moving_window(frames, pixels_per_frame).masks:
+        noisy = mask.copy()
+        for row, column in points:
+            noisy[row : row + 2, column : column + 2] = 255
+        masks.append(noisy)
+    return _window(masks)
+
+
+def _span(indices: tuple[int, ...]) -> int:
+    """How much of the window the selection reaches across."""
+    return indices[-1] - indices[0]
 
 
 def test_defaults_are_what_the_docstrings_claim():
     """The packaged defaults, pinned so a silent change is visible."""
     sampler = AdaptiveFrameSampler()
 
-    assert (sampler.min_frames, sampler.max_frames) == (3, 8)
-    assert (DEFAULT_MIN_FRAMES, DEFAULT_MAX_FRAMES) == (3, 8)
-    assert sampler.full_speed == DEFAULT_FULL_SPEED == 0.05
+    assert sampler.sample_frames == DEFAULT_SAMPLE_FRAMES == 4
+    assert sampler.full_speed == DEFAULT_FULL_SPEED == 0.35
 
 
-def test_a_still_window_keeps_the_minimum():
-    """Nothing moving means nothing to resolve, so the floor is enough."""
+# --- what the change-rate metric exists to catch ---
+
+
+def test_approaching_the_camera_is_not_read_as_still():
+    """A subject growing in place is moving, though its centre is not."""
     sampler = AdaptiveFrameSampler()
 
-    assert len(sampler.select(_moving_window(10, 0))) == sampler.min_frames
+    assert sampler.velocity(_approaching_window(10)) > sampler.velocity(
+        _moving_window(10, 0)
+    )
 
 
-def test_motion_at_full_speed_keeps_the_maximum():
-    """At ``full_speed`` the count saturates, by definition."""
-    sampler = AdaptiveFrameSampler()
-    # full_speed 0.05 of a 200px diagonal is 10px per frame.
-    window = _moving_window(10, DEFAULT_FULL_SPEED * DIAGONAL)
-
-    assert len(sampler.select(window)) == sampler.max_frames
+def test_two_subjects_moving_apart_are_not_read_as_still():
+    """Two subjects separating cancel out as a centre but not as change."""
+    assert AdaptiveFrameSampler().velocity(_two_apart_window(10)) > 0.1
 
 
-def test_motion_beyond_full_speed_does_not_keep_more():
-    """The count saturates rather than running past ``max_frames``."""
+def test_velocity_does_not_depend_on_window_length():
+    """Averaging over pairs, not dividing by steps, keeps N out of the answer."""
     sampler = AdaptiveFrameSampler()
 
-    at_speed = sampler.select(_moving_window(10, 10))
-    far_faster = sampler.select(_moving_window(10, 40))
-
-    assert len(far_faster) == len(at_speed) == sampler.max_frames
-
-
-def test_faster_motion_keeps_more_frames():
-    """The headline behaviour: the count rises with velocity."""
-    sampler = AdaptiveFrameSampler()
-
-    counts = [len(sampler.select(_moving_window(10, speed))) for speed in (0, 4, 10)]
-
-    assert counts[0] < counts[1] < counts[2]
+    assert sampler.velocity(_moving_window(10, WALKING_PX)) == pytest.approx(
+        sampler.velocity(_moving_window(20, WALKING_PX)), abs=0.02
+    )
 
 
-def test_the_count_never_falls_as_motion_rises():
-    """Across the whole velocity range the mapping is non-decreasing."""
-    sampler = AdaptiveFrameSampler()
-    speeds = [0, 0.5, 1, 2, 3, 4, 5, 6, 8, 10, 14, 20]
+def test_velocity_is_resolution_independent():
+    """The same motion on a bigger frame reads the same rate.
 
-    counts = [len(sampler.select(_moving_window(10, speed))) for speed in speeds]
-
-    assert counts == sorted(counts)
-
-
-def test_the_velocity_term_is_not_a_no_op_at_ten_frames():
-    """The issue's question, pinned: the rate really does move at N=10.
-
-    With ``window_frames=10`` there is little room between the floor and
-    the ceiling, so this asserts the adaptation actually produces a range
-    of counts rather than quietly collapsing to one.
+    The share is taken over the subject's own pixels, so scaling the
+    whole scene scales numerator and denominator alike.
     """
     sampler = AdaptiveFrameSampler()
-    speeds = [0, 1, 4, 5, 8, 10]
 
-    counts = {len(sampler.select(_moving_window(10, speed))) for speed in speeds}
+    def window_at(scale: int) -> Window:
+        masks = []
+        for index in range(10):
+            mask = np.zeros((HEIGHT * scale, WIDTH * scale), np.uint8)
+            left = (10 + index * WALKING_PX) * scale
+            mask[50 * scale : 70 * scale, left : left + BOX * scale] = 255
+            masks.append(mask)
+        return _window(masks)
 
-    assert counts == {3, 4, 5, 6, 7, 8}
+    assert sampler.velocity(window_at(1)) == pytest.approx(
+        sampler.velocity(window_at(3)), abs=0.02
+    )
+
+
+def test_velocity_stays_within_zero_and_one():
+    """A share of a subject cannot exceed the whole of it."""
+    sampler = AdaptiveFrameSampler()
+
+    for speed in (0, 1, 3, 10, 40):
+        assert 0.0 <= sampler.velocity(_moving_window(10, speed)) <= 1.0
+
+
+def test_velocity_rises_with_speed():
+    """Faster sideways motion flips a larger share of the subject."""
+    sampler = AdaptiveFrameSampler()
+
+    readings = [sampler.velocity(_moving_window(10, px)) for px in (0, 1, 2, 3)]
+
+    assert readings == sorted(readings)
+
+
+def test_velocity_is_zero_for_a_still_window():
+    """A foreground that does not change has no rate of change."""
+    assert AdaptiveFrameSampler().velocity(_moving_window(10, 0)) == 0.0
+
+
+def test_velocity_is_zero_when_the_foreground_is_missing():
+    """No foreground in either mask means no share to measure."""
+    assert AdaptiveFrameSampler().velocity(_blank_window(10)) == 0.0
+
+
+def test_velocity_is_zero_for_a_single_frame_window():
+    """One frame makes no pair, so there is nothing to compare."""
+    assert AdaptiveFrameSampler().velocity(_moving_window(1, 10)) == 0.0
+
+
+def test_static_specks_barely_move_the_reading():
+    """Noise that stays put is shared by both masks, so it mostly cancels."""
+    sampler = AdaptiveFrameSampler()
+
+    clean = sampler.velocity(_moving_window(10, WALKING_PX))
+    speckled = sampler.velocity(_static_speck_window(10, WALKING_PX, 60))
+
+    assert abs(clean - speckled) < 0.1
+
+
+def test_flickering_noise_inflates_the_reading():
+    """The metric's known weakness, pinned rather than papered over.
+
+    Noise that lands somewhere new each frame is change, and this
+    measures change, so it reads as motion. A still scene under heavy
+    flicker can read faster than a walking one under none. The defence
+    is upstream — the noise reducer and the subtractor exist to remove
+    this before it arrives — so this test documents the exposure rather
+    than asserting it is handled here.
+    """
+    sampler = AdaptiveFrameSampler()
+
+    still_but_noisy = sampler.velocity(_flickering_window(10, 0, 60))
+    walking_and_clean = sampler.velocity(_moving_window(10, WALKING_PX))
+
+    assert still_but_noisy > walking_and_clean
+
+
+# --- the fixed count, which is what the encoder depends on ---
+
+
+@pytest.mark.parametrize("speed", [0, 1, 2, 3, 4, 6, 10, 30])
+def test_the_count_is_fixed_whatever_the_motion(speed):
+    """Always ``sample_frames`` indices, so the encoder has nothing to pad."""
+    sampler = AdaptiveFrameSampler()
+
+    assert len(sampler.select(_moving_window(10, speed))) == sampler.sample_frames
+
+
+def test_the_count_is_fixed_across_window_lengths():
+    """Window length changes the spacing, never the number of samples."""
+    sampler = AdaptiveFrameSampler()
+
+    for length in (4, 6, 10, 25):
+        assert len(sampler.select(_moving_window(length, WALKING_PX))) == 4
+
+
+def test_a_window_shorter_than_the_sample_count_yields_what_it_has():
+    """The one case the count is not fixed, and it cannot be."""
+    sampler = AdaptiveFrameSampler(sample_frames=6)
+
+    assert sampler.select(_moving_window(3, 2)) == (0, 1, 2)
+
+
+def test_a_single_frame_window_yields_its_only_frame():
+    """Degenerate but constructible, so it has a defined answer."""
+    assert AdaptiveFrameSampler().select(_moving_window(1, 0)) == (0,)
+
+
+# --- the spacing, which is what the change rate moves ---
+
+
+def test_slow_motion_spreads_across_the_whole_window():
+    """A still scene is sampled end to end, so the samples differ at all."""
+    assert AdaptiveFrameSampler().select(_moving_window(10, 0)) == (0, 3, 6, 9)
+
+
+def test_fast_motion_packs_onto_the_newest_frames():
+    """Past ``full_speed`` the samples are the last four frames."""
+    assert AdaptiveFrameSampler().select(_moving_window(10, RUNNING_PX)) == (6, 7, 8, 9)
+
+
+def test_motion_beyond_full_speed_does_not_tighten_further():
+    """Consecutive frames is the floor; the spacing saturates there."""
+    sampler = AdaptiveFrameSampler()
+
+    at_speed = sampler.select(_moving_window(10, RUNNING_PX))
+    far_faster = sampler.select(_moving_window(10, FASTEST_PX))
+
+    assert far_faster == at_speed == (6, 7, 8, 9)
+
+
+def test_a_subject_that_stops_part_way_reads_as_still():
+    """Motion is measured where it is sampled, not where it happened.
+
+    A subject crossing fast enough to reach the far edge is stationary
+    for the rest of the window, and only the second half is measured, so
+    the reading is zero and the samples spread back out. Correct rather
+    than surprising: by the time these frames are sampled there is
+    nothing moving in them, and the wide spread is what shows the
+    subject arriving and then holding still.
+    """
+    sampler = AdaptiveFrameSampler()
+    window = _moving_window(10, 40)
+
+    assert sampler.velocity(window) == 0.0
+    assert sampler.select(window) == (0, 3, 6, 9)
+
+
+def test_faster_motion_never_spreads_wider():
+    """Across the velocity range the span is non-increasing."""
+    sampler = AdaptiveFrameSampler()
+    speeds = [0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4, 6, 10]
+
+    spans = [_span(sampler.select(_moving_window(10, s))) for s in speeds]
+
+    assert spans == sorted(spans, reverse=True)
 
 
 def test_faster_and_slower_motion_produce_different_index_sets():
-    """Not merely different counts — different frames are chosen."""
+    """The acceptance criterion: velocity actually changes the selection."""
     sampler = AdaptiveFrameSampler()
 
-    slow = sampler.select(_moving_window(10, 0))
-    fast = sampler.select(_moving_window(10, 10))
-
-    assert slow != fast
-
-
-@pytest.mark.parametrize("speed", [0, 1, 2, 4, 6, 10, 25])
-def test_indices_are_strictly_increasing(speed):
-    """No repeats and no going backwards, at any velocity."""
-    indices = AdaptiveFrameSampler().select(_moving_window(10, speed))
-
-    assert list(indices) == sorted(set(indices))
+    assert sampler.select(_moving_window(10, 0)) != sampler.select(
+        _moving_window(10, RUNNING_PX)
+    )
 
 
-@pytest.mark.parametrize("speed", [0, 1, 2, 4, 6, 10, 25])
-def test_indices_are_within_the_window(speed):
-    """Every index addresses a frame the window actually holds."""
-    window = _moving_window(10, speed)
+def test_the_velocity_term_is_not_a_no_op_at_ten_frames():
+    """The issue's question, pinned: the spacing really does move at N=10.
 
-    indices = AdaptiveFrameSampler().select(window)
+    A plain integer stride would offer only 1, 2 or 3 on a ten-frame
+    window. Moving a span instead keeps the choice fine-grained, and this
+    asserts that breadth survives.
+    """
+    sampler = AdaptiveFrameSampler()
+    speeds = [0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4, 6, 10]
 
-    assert all(0 <= index < len(window) for index in indices)
+    selections = {sampler.select(_moving_window(10, s)) for s in speeds}
 
-
-@pytest.mark.parametrize("speed", [0, 4, 10])
-def test_the_selection_spans_the_whole_window(speed):
-    """The first and last frames are always kept, so the burst is bracketed."""
-    window = _moving_window(10, speed)
-
-    indices = AdaptiveFrameSampler().select(window)
-
-    assert indices[0] == 0
-    assert indices[-1] == len(window) - 1
+    assert len(selections) == 7
 
 
 @pytest.mark.parametrize(
     ("speed", "expected"),
     [
-        (0, (0, 4, 9)),
-        (2, (0, 3, 6, 9)),
-        (10, (0, 1, 3, 4, 5, 6, 8, 9)),
+        (0, (0, 3, 6, 9)),
+        (0.5, (1, 4, 6, 9)),
+        (1, (2, 4, 7, 9)),
+        (2, (3, 5, 7, 9)),
+        (3, (4, 6, 7, 9)),
+        (3.5, (5, 6, 8, 9)),
+        (4, (6, 7, 8, 9)),
     ],
 )
 def test_known_velocity_gives_the_expected_indices(speed, expected):
@@ -159,123 +351,94 @@ def test_known_velocity_gives_the_expected_indices(speed, expected):
     assert AdaptiveFrameSampler().select(_moving_window(10, speed)) == expected
 
 
-def test_velocity_is_zero_for_a_still_window():
-    """A foreground that does not move has no speed."""
-    assert AdaptiveFrameSampler().velocity(_moving_window(10, 0)) == 0.0
+# --- invariants that hold at every velocity ---
 
 
-def test_velocity_matches_the_distance_travelled():
-    """Velocity is the centroid's travel per frame over the diagonal."""
-    sampler = AdaptiveFrameSampler()
+@pytest.mark.parametrize("speed", [0, 1, 2, 3, 4, 10, 25])
+def test_indices_are_strictly_increasing(speed):
+    """No repeats and no going backwards, at any velocity."""
+    indices = AdaptiveFrameSampler().select(_moving_window(10, speed))
 
-    # 4px per frame across a 200px diagonal.
-    assert sampler.velocity(_moving_window(10, 4)) == pytest.approx(4 / DIAGONAL)
-
-
-def test_velocity_is_zero_when_the_foreground_is_missing():
-    """An empty mask locates nothing, which is not the same as standing still."""
-    assert AdaptiveFrameSampler().velocity(_blank_window(10)) == 0.0
+    assert list(indices) == sorted(set(indices))
 
 
-def test_velocity_is_zero_for_a_single_frame_window():
-    """A window with no middle frame has nothing to compare against."""
-    assert AdaptiveFrameSampler().velocity(_moving_window(1, 10)) == 0.0
+@pytest.mark.parametrize("speed", [0, 1, 2, 3, 4, 10, 25])
+def test_indices_are_within_the_window(speed):
+    """Every index addresses a frame the window actually holds."""
+    window = _moving_window(10, speed)
 
-
-def test_velocity_is_resolution_independent():
-    """The same motion, measured on a bigger frame, reads the same speed.
-
-    Velocity is a fraction of the diagonal rather than a pixel count, so
-    ``full_speed`` keeps its meaning whatever the caller feeds in.
-    """
-    sampler = AdaptiveFrameSampler()
-
-    def window_at(scale: int) -> Window:
-        masks, pictures = [], []
-        for index in range(10):
-            mask = np.zeros((HEIGHT * scale, WIDTH * scale), np.uint8)
-            left = (10 + index * 4) * scale
-            mask[50 * scale : 70 * scale, left : left + BOX * scale] = 255
-            masks.append(mask)
-            pictures.append(np.zeros((HEIGHT * scale, WIDTH * scale, 3), np.uint8))
-        return Window(frames=tuple(pictures), masks=tuple(masks))
-
-    assert sampler.velocity(window_at(1)) == pytest.approx(
-        sampler.velocity(window_at(3))
+    assert all(
+        0 <= index < len(window) for index in AdaptiveFrameSampler().select(window)
     )
 
 
-def test_a_short_window_is_never_oversampled():
-    """A window holding fewer frames than wanted yields only what it has."""
-    sampler = AdaptiveFrameSampler(min_frames=8, max_frames=8)
+@pytest.mark.parametrize("speed", [0, 2, 4, 10, 30])
+def test_the_selection_always_ends_at_the_last_frame(speed):
+    """The freshest frame is always kept; tightening drops the oldest."""
+    window = _moving_window(10, speed)
 
-    indices = sampler.select(_moving_window(3, 10))
-
-    assert len(indices) == 3
-    assert indices == (0, 1, 2)
+    assert AdaptiveFrameSampler().select(window)[-1] == len(window) - 1
 
 
-def test_equal_min_and_max_disables_the_adaptation():
-    """Pinning both ends turns the sampler into a fixed-rate one."""
-    sampler = AdaptiveFrameSampler(min_frames=4, max_frames=4)
+def test_select_returns_plain_ints():
+    """Indices are Python ints, not numpy scalars.
 
-    slow = sampler.select(_moving_window(10, 0))
-    fast = sampler.select(_moving_window(10, 30))
+    ``linspace`` yields numpy integers, and a ``np.int64`` reaching
+    ``MotionImage.frame_indices`` would compare equal but serialise
+    oddly and fail an identity check.
+    """
+    indices = AdaptiveFrameSampler().select(_moving_window(10, WALKING_PX))
 
-    assert slow == fast
-    assert len(slow) == 4
+    assert all(type(index) is int for index in indices)
 
 
-def test_full_speed_sets_where_saturation_lands():
-    """A lower ``full_speed`` reaches the maximum on slower motion."""
+# --- configuration ---
+
+
+def test_full_speed_sets_where_the_spacing_bottoms_out():
+    """A lower ``full_speed`` reaches the tightest spacing on slower motion."""
     gentle = AdaptiveFrameSampler(full_speed=0.005)
-    strict = AdaptiveFrameSampler(full_speed=0.5)
-    window = _moving_window(10, 4)
+    strict = AdaptiveFrameSampler(full_speed=5.0)
+    window = _moving_window(10, WALKING_PX)
 
-    assert len(gentle.select(window)) == gentle.max_frames
-    assert len(strict.select(window)) == strict.min_frames
+    assert gentle.select(window) == (6, 7, 8, 9)
+    assert strict.select(window) == (0, 3, 6, 9)
+
+
+def test_sample_frames_sets_how_many_are_kept():
+    """The count follows the kwarg, at every velocity."""
+    sampler = AdaptiveFrameSampler(sample_frames=6)
+
+    assert len(sampler.select(_moving_window(10, 0))) == 6
+    assert len(sampler.select(_moving_window(10, RUNNING_PX))) == 6
 
 
 def test_the_sampler_is_stateless():
     """Windows are judged independently; nothing carries between them."""
     sampler = AdaptiveFrameSampler()
-    fast = _moving_window(10, 10)
-    slow = _moving_window(10, 0)
+    fast = _moving_window(10, RUNNING_PX)
 
     first = sampler.select(fast)
-    sampler.select(slow)
+    sampler.select(_moving_window(10, 0))
 
     assert sampler.select(fast) == first
 
 
-@pytest.mark.parametrize("value", [None, 3.5, "3", [3], True, False])
-def test_non_integer_min_frames_is_rejected(value):
+@pytest.mark.parametrize("value", [None, 4.5, "4", [4], True, False])
+def test_non_integer_sample_frames_is_rejected(value):
     """A frame count that is not a whole number fails at construction."""
-    with pytest.raises(ValueError, match="min_frames must be an integer"):
-        AdaptiveFrameSampler(min_frames=value)
+    with pytest.raises(ValueError, match="sample_frames must be an integer"):
+        AdaptiveFrameSampler(sample_frames=value)
 
 
 @pytest.mark.parametrize("value", [1, 0, -1])
-def test_min_frames_below_two_is_rejected(value):
+def test_sample_frames_below_two_is_rejected(value):
     """One frame shows no movement, so two is the floor."""
-    with pytest.raises(ValueError, match="min_frames must be at least 2"):
-        AdaptiveFrameSampler(min_frames=value)
+    with pytest.raises(ValueError, match="sample_frames must be at least 2"):
+        AdaptiveFrameSampler(sample_frames=value)
 
 
-@pytest.mark.parametrize("value", [None, 8.5, "8", True])
-def test_non_integer_max_frames_is_rejected(value):
-    """Same rule at the other end."""
-    with pytest.raises(ValueError, match="max_frames must be an integer"):
-        AdaptiveFrameSampler(max_frames=value)
-
-
-def test_max_frames_below_min_frames_is_rejected():
-    """An inverted range would make faster motion keep fewer frames."""
-    with pytest.raises(ValueError, match="max_frames must be at least min_frames"):
-        AdaptiveFrameSampler(min_frames=6, max_frames=5)
-
-
-@pytest.mark.parametrize("value", [None, "0.05", [0.05], True, False])
+@pytest.mark.parametrize("value", [None, "0.35", [0.35], True, False])
 def test_non_numeric_full_speed_is_rejected(value):
     """A saturation point that is not a number fails at construction."""
     with pytest.raises(ValueError, match="full_speed must be a number"):
@@ -289,22 +452,10 @@ def test_non_positive_full_speed_is_rejected(value):
         AdaptiveFrameSampler(full_speed=value)
 
 
-@pytest.mark.parametrize("name", ["min_frames", "max_frames", "full_speed"])
+@pytest.mark.parametrize("name", ["sample_frames", "full_speed"])
 def test_the_properties_are_read_only(name):
     """Configuration is fixed once validated."""
     sampler = AdaptiveFrameSampler()
 
     with pytest.raises(AttributeError):
         setattr(sampler, name, 5)
-
-
-def test_select_returns_plain_ints():
-    """Indices are Python ints, not numpy scalars, so they index and compare.
-
-    ``linspace`` and ``unique`` both yield numpy integers, and a
-    ``np.int64`` leaking into ``MotionImage.frame_indices`` would compare
-    equal but serialise oddly and fail an ``is``-style identity check.
-    """
-    indices = AdaptiveFrameSampler().select(_moving_window(10, 4))
-
-    assert all(type(index) is int for index in indices)
