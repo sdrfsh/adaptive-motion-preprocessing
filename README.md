@@ -1,32 +1,34 @@
 # Adaptive Motion Preprocessing
 
-Adaptive Motion Preprocessing converts video frames into encoded motion images for downstream neural-network inference. It adaptively selects frames while preserving a consistent output format for the model.
+Turns video frames into motion images for a neural network. While something
+moves, each window of frames becomes one `uint8` grayscale image. Older
+frames are painted dimmer and newer ones brighter. Which frames get sampled
+depends on how fast the motion is, and every image comes out in the same shape.
 
-## Installation
+## Install
 
-```powershell
+```sh
 pip install adaptive-motion-preprocessing
 ```
 
-## Usage
+The import name is `amprep`.
 
-The input is an iterable of frames — a `uint8` `(H, W, 3)` BGR array each. A
-list, a generator, a custom iterator and a loop around a live camera are all
-accepted and all treated the same, because by the time a frame reaches the
-pipeline there is nothing left to tell them apart.
+## Example
 
-Reading video is deliberately your job, not the package's. Nothing inside
-`amprep` opens a camera or a file, so nothing inside it can leak a device
-handle. Producing frames from a file takes a few lines:
+The package takes any iterable of `uint8` BGR frames and never opens a video
+itself. Reading one is a few lines:
 
 ```python
 import cv2
+
 from amprep import AdaptiveMotionPreprocessor
 
 
 def frames_from(path):
     capture = cv2.VideoCapture(path)
     try:
+        if not capture.isOpened():
+            raise OSError(f"cannot open video: {path}")
         while True:
             ok, frame = capture.read()
             if not ok:
@@ -37,17 +39,14 @@ def frames_from(path):
 
 
 for image in AdaptiveMotionPreprocessor().process(frames_from("clip.mp4")):
-    ...
+    print(image.data.shape)
 ```
 
-Keep the `try`/`finally`. Without it the capture handle leaks whenever the
-loop is left early — a `break`, an exception, or simply not consuming the
-generator to the end.
+While motion lasts, one image comes out every `window_frames` frames (default
+10). That count is frames, not seconds: 10 frames is about 0.33 s at 30 fps
+and 1 s at 10 fps. The package never reads the frame rate, so converting
+between the two is up to you.
 
-Frames must arrive in capture order. The pipeline accumulates state across
-consecutive frames, so a shuffled stream describes motion that never happened.
-
-`process` consumes the stream lazily, one frame at a time, and never
-materialises it, so an unbounded source such as a camera is fine.
-
-Status: in development.
+More: [examples/from_video_file.py](examples/from_video_file.py) ·
+[examples/custom_background_subtractor.py](examples/custom_background_subtractor.py)
+(plugging in your own stage)
