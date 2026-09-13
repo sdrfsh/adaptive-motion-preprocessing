@@ -89,6 +89,6 @@ All optional keyword arguments of `AdaptiveMotionPreprocessor(...)`:
 
 ## 📚 Examples
 
-- [examples/live_camera.py](examples/live_camera.py): watch it live on your webcam, camera and motion image side by side
-- [examples/from_video_file.py](examples/from_video_file.py): run it on a video file
-- [examples/custom_background_subtractor.py](examples/custom_background_subtractor.py): plug in your own stage
+- [examples/live_camera.py](https://github.com/sdrfsh/adaptive-motion-preprocessing/blob/main/examples/live_camera.py): watch it live on your webcam, camera and motion image side by side
+- [examples/from_video_file.py](https://github.com/sdrfsh/adaptive-motion-preprocessing/blob/main/examples/from_video_file.py): run it on a video file
+- [examples/custom_background_subtractor.py](https://github.com/sdrfsh/adaptive-motion-preprocessing/blob/main/examples/custom_background_subtractor.py): plug in your own stage

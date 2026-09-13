@@ -44,10 +44,12 @@ def test_readme_frames_from_is_the_example_verbatim():
 
 
 def test_readme_links_every_example():
+    """Full GitHub URLs, because PyPI shows the README without the repo."""
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    base = "https://github.com/sdrfsh/adaptive-motion-preprocessing/blob/main"
 
     for script in sorted(EXAMPLES.glob("*.py")):
-        assert f"(examples/{script.name})" in readme
+        assert f"({base}/examples/{script.name})" in readme
 
 
 def test_from_video_file_prints_a_shape_per_motion_image(tmp_path):
