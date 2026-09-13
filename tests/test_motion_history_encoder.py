@@ -97,6 +97,28 @@ def test_newer_is_brighter():
     assert [int(image.data[12, i * 8 + 2]) for i in range(4)] == [64, 128, 191, 255]
 
 
+def test_brightness_follows_capture_time():
+    """Brightness is when a frame was captured, not its place in the sample.
+
+    The last frame is 255 in both selections, while the oldest frame each
+    one reaches differs: frame 0 of ten is 26, frame 6 of ten is 178.
+    """
+    masks = []
+    for i in range(10):
+        m = np.zeros((20, 40), np.uint8)
+        m[5:15, i * 4 : i * 4 + 2] = 255
+        masks.append(m)
+    window = _window(masks)
+    encoder = MotionHistoryEncoder()
+
+    spread = encoder.encode(window, (0, 3, 6, 9)).data
+    tight = encoder.encode(window, (6, 7, 8, 9)).data
+
+    assert int(spread[10, 0]) == 26  # frame 0 of 10
+    assert int(tight[10, 24]) == 178  # frame 6 of 10
+    assert int(spread[10, 36]) == int(tight[10, 36]) == 255
+
+
 def test_the_newest_mask_wins_where_they_overlap():
     """Brightest wins, and brightest is newest, so the trail reads correctly."""
     masks = [np.full((20, 20), 255, np.uint8) for _ in range(4)]
@@ -138,9 +160,9 @@ def test_thin_person_is_not_lost_when_shrunk():
 
 
 def test_a_single_index_is_painted_at_full_brightness():
-    """With one mask it is both oldest and newest, so nothing is dimmed."""
+    """The last frame of the window is full brightness, even painted alone."""
     image = MotionHistoryEncoder(width=20, height=20).encode(
-        _window(_full(20, 20, 4)), (2,)
+        _window(_full(20, 20, 4)), (3,)
     )
 
     assert (image.data == 255).all()

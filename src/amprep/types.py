@@ -23,10 +23,14 @@ class MotionImage:
 
     Contract:
         ``data`` dtype:  ``numpy.uint8``
-        ``data`` shape:  fixed and identical for every ``MotionImage``
-                         the pipeline produces, regardless of how many
-                         frames were sampled or how fast the motion was.
-                         The encoder resizes or pads to reach it.
+        ``data`` shape:  ``(H, W)``, one channel. The ``width`` and
+                         ``height`` the preprocessor was given, or the
+                         size of the incoming frames when it was given
+                         none. Nothing is padded. It does not depend on
+                         how many frames were sampled or how fast the
+                         motion was, and the frame size cannot change
+                         mid-stream without ``reset()``, so it holds for
+                         every ``MotionImage`` of a stream.
 
     A fixed shape is the point of this type: a downstream model declares
     one input size, so a pipeline that sometimes emits a different shape

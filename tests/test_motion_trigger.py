@@ -7,7 +7,7 @@ from amprep.motion_trigger import DEFAULT_THRESHOLD, MotionTrigger
 MASK_SHAPE = (10, 10)
 """One hundred pixels, so a pixel count reads directly as a percentage.
 
-One pixel is exactly 1%, which is also ``DEFAULT_THRESHOLD`` — the
+One pixel is exactly 1%, which is also ``DEFAULT_THRESHOLD``: the
 boundary the trigger is most worth testing at.
 """
 
@@ -110,7 +110,7 @@ def test_any_non_zero_pixel_counts_as_foreground():
     """Foreground is counted, not thresholded: a mask of ones still counts.
 
     ``KNNBackgroundSubtractor`` emits a strictly binary 0/255 mask, but
-    the trigger does not depend on that — a custom subtractor labelling
+    the trigger does not depend on that: a custom subtractor labelling
     foreground with 1 is measured the same way.
     """
     trigger = MotionTrigger(threshold=0.05)

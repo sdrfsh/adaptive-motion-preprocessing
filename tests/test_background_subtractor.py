@@ -517,7 +517,7 @@ def test_knn_warmup_is_long_enough_to_settle():
     KNN judges a pixel against its recent samples, so on the opening
     frames it has too few to judge with and calls almost everything
     foreground. This asserts the count is *sufficient* rather than exact
-    — that masks are trustworthy once the warmup is spent — because how
+    (that masks are trustworthy once the warmup is spent), because how
     many frames it takes to get there is OpenCV's business and could
     reasonably shift between builds.
     """

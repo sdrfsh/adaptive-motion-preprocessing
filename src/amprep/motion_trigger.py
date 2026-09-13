@@ -55,7 +55,7 @@ class MotionTrigger:
     def update(self, mask: Frame) -> bool:
         # ``count_nonzero`` hands back a NumPy integer, which would make
         # the fraction a ``float64`` and the comparison below a
-        # ``np.bool_`` — and ``np.bool_`` is not a ``bool``, so a caller
+        # ``np.bool_``, and ``np.bool_`` is not a ``bool``, so a caller
         # writing ``if trigger.update(mask) is True`` would silently
         # never match. Coercing here keeps both annotations honest.
         self._last_fraction = float(np.count_nonzero(mask) / mask.size)

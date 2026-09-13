@@ -1,32 +1,36 @@
-# Adaptive Motion Preprocessing
+# 🎞️ Adaptive Motion Preprocessing
 
-Adaptive Motion Preprocessing converts video frames into encoded motion images for downstream neural-network inference. It adaptively selects frames while preserving a consistent output format for the model.
+Turn video into motion images your neural network can read. 
 
-## Installation
+While something moves, each window of frames becomes one grayscale picture:
+older frames dim, newer ones bright, so a single image shows where the
+subject went and how fast. Every image has the same shape, so your model
+never gets a surprise. 
 
-```powershell
+## 📦 Install
+
+```sh
 pip install adaptive-motion-preprocessing
 ```
 
-## Usage
+Then `import amprep`.
 
-The input is an iterable of frames — a `uint8` `(H, W, 3)` BGR array each. A
-list, a generator, a custom iterator and a loop around a live camera are all
-accepted and all treated the same, because by the time a frame reaches the
-pipeline there is nothing left to tell them apart.
+## 🚀 Quick start
 
-Reading video is deliberately your job, not the package's. Nothing inside
-`amprep` opens a camera or a file, so nothing inside it can leak a device
-handle. Producing frames from a file takes a few lines:
+You bring the frames (any iterable of `uint8` BGR arrays) and the package
+does the rest:
 
 ```python
 import cv2
+
 from amprep import AdaptiveMotionPreprocessor
 
 
 def frames_from(path):
     capture = cv2.VideoCapture(path)
     try:
+        if not capture.isOpened():
+            raise OSError(f"cannot open video: {path}")
         while True:
             ok, frame = capture.read()
             if not ok:
@@ -37,17 +41,38 @@ def frames_from(path):
 
 
 for image in AdaptiveMotionPreprocessor().process(frames_from("clip.mp4")):
-    ...
+    print(image.data.shape)
 ```
 
-Keep the `try`/`finally`. Without it the capture handle leaks whenever the
-loop is left early — a `break`, an exception, or simply not consuming the
-generator to the end.
+## ⚙️ Settings
 
-Frames must arrive in capture order. The pipeline accumulates state across
-consecutive frames, so a shuffled stream describes motion that never happened.
+All optional keyword arguments of `AdaptiveMotionPreprocessor(...)`:
 
-`process` consumes the stream lazily, one frame at a time, and never
-materialises it, so an unbounded source such as a camera is fine.
+| Setting | Default | What it does |
+| --- | --- | --- |
+| `motion_threshold` | `0.01` | Share of the frame that must be moving before frames are collected |
+| `window_frames` | `10` | Frames per window, and one image per full window |
+| `sample_frames` | `4` | Frames painted into each image (at most `window_frames`) |
+| `width`, `height` | `None` | Output size; leave unset to keep the frame size, or set both |
+| `noise_reducer` | median filter | Your own `NoiseReducer` subclass |
+| `background_subtractor` | KNN | Your own `BackgroundSubtractor` subclass |
 
-Status: in development.
+## 💡 Good to know
+
+- ⏱️ **Frames, not seconds.** 10 frames is about 0.33 s at 30 fps and 1 s at
+  10 fps. The package never reads the frame rate, so that math is yours.
+- 🔁 **A steady stream.** While motion lasts you get one image every
+  `window_frames` frames. A half-full window is dropped when motion stops.
+- 🌱 **Warm-up.** The default subtractor spends its first 4 frames learning
+  the background, so they never produce images. Change it with
+  `KNNBackgroundSubtractor(warmup_frames=...)`.
+- 🎬 **New scene?** Call `reset()`. It forgets the background, any half-built
+  window and the frame size. Otherwise state carries over between
+  `process()` calls.
+- 📐 **One frame size per scene.** Frames that change size mid-stream raise a
+  `ValueError`. Call `reset()` first if the change is on purpose.
+
+## 📚 Examples
+
+- [examples/from_video_file.py](examples/from_video_file.py): run it on a video file
+- [examples/custom_background_subtractor.py](examples/custom_background_subtractor.py): plug in your own stage

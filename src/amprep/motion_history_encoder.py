@@ -7,29 +7,33 @@ from amprep.types import MotionImage, Window
 class MotionHistoryEncoder:
     """Paints sampled masks into one gray image: old = dim, new = bright.
 
-    The last stage. Four masks go in and one picture comes out, each mask
-    painted at its own brightness so the result reads as a trail::
+    The last stage. The sampled masks go in and one picture comes out,
+    each mask painted at its own brightness so the result reads as a
+    trail.
 
-        mask 1 (oldest)  -> gray  64
-        mask 2           -> gray 128
-        mask 3           -> gray 191
-        mask 4 (newest)  -> gray 255
+    A frame's brightness is how late in the window it was captured: the
+    newest frame is 255, the first frame of a ten-frame window is 26. Fast
+    motion is sampled from the end of the window, so its whole trail is
+    bright; slow motion spans the window, so its trail fades. The picture
+    shows both how far the subject moved and how long that took.
 
     Where the masks overlap the brighter value wins, so the subject's
     current position is always on top and the dimmer trail shows where it
     came from.
 
     Size is the caller's business. Given no size the masks are painted at
-    the size they arrive in, untouched — a 100x200 source yields a
+    the size they arrive in, untouched: a 100x200 source yields a
     100x200 image, and a model built for that source needs nothing done
     to it. The shape stays fixed across windows because the source
     resolution does, not because anything here enforces it.
 
     Give a size and every mask is scaled to it instead, for a model whose
     input differs from the camera. Scaling uses ``INTER_AREA``, which
-    averages the pixels it merges rather than picking one of them: a
-    subject two pixels wide survives a large reduction as a faint value
-    instead of disappearing at most positions.
+    averages the pixels it merges rather than picking one of them, so a
+    subject two pixels wide still leaves a small nonzero value after a
+    large reduction instead of disappearing at most positions. Any
+    nonzero mask pixel counts as foreground, so that value is painted at
+    its frame's full brightness, not dimmed by the averaging.
 
     Args:
         width: Output width in pixels, or ``None`` to keep the source
@@ -97,8 +101,11 @@ class MotionHistoryEncoder:
             shape = (self._height, self._width)
 
         image = np.zeros(shape, dtype=np.uint8)
-        for position, index in enumerate(indices):
-            brightness = np.uint8(round(255 * (position + 1) / len(indices)))
+        for index in indices:
+            # By when the frame was captured, not by its place in the
+            # sample: the same frame paints the same grey however the
+            # sampler spaced the frames around it.
+            brightness = np.uint8(round(255 * (index + 1) / len(window)))
             mask = window.masks[index]
             if mask.shape[:2] != shape:
                 # cv2 wants (width, height). numpy shapes are (height, width).

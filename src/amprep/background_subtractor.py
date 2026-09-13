@@ -28,7 +28,7 @@ class BackgroundSubtractor(ABC):
     """Separates moving foreground from a learned background model.
 
     Subclass this and implement ``_apply`` and ``reset`` to plug in your
-    own subtractor. Do not override ``apply`` — it validates the input
+    own subtractor. Do not override ``apply``: it validates the input
     frame and the returned mask against the contract below. Pass an
     instance to ``AdaptiveMotionPreprocessor(background_subtractor=...)``;
     leave it unset and the package's default implementation is used
@@ -36,7 +36,7 @@ class BackgroundSubtractor(ABC):
 
     Contract:
         ``_apply`` takes a ``uint8`` ``(H, W, 3)`` BGR frame and must
-        return a **single-channel** ``uint8`` mask of shape ``(H, W)`` —
+        return a **single-channel** ``uint8`` mask of shape ``(H, W)``,
         the same height and width as its input. Implementations are
         stateful: consecutive calls are expected to come from the same
         video, in order, so the background model can adapt.
@@ -69,8 +69,8 @@ class BackgroundSubtractor(ABC):
     def reset(self) -> None:
         """Discard the learned background model.
 
-        Called when the scene changes — a cut, a camera move, or the
-        start of a different video — so that state accumulated from the
+        Called when the scene changes (a cut, a camera move, or the
+        start of a different video), so that state accumulated from the
         preceding frames does not leak into the next one. Implementations
         that hold no state between frames should implement this as a
         no-op.
@@ -188,8 +188,8 @@ class KNNBackgroundSubtractor(BackgroundSubtractor):
 
     def _apply(self, frame: Frame) -> Frame:
         mask = self._subtractor.apply(frame)
-        # OpenCV labels foreground 255 and everything else — background,
-        # and shadows when detect_shadows is on — below it.
+        # OpenCV labels foreground 255 and everything else (background,
+        # and shadows when detect_shadows is on) below it.
         return np.where(mask == 255, np.uint8(255), np.uint8(0))
 
     def reset(self) -> None:
