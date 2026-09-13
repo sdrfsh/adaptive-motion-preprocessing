@@ -46,3 +46,44 @@ class MotionImage:
         """Ensure the image data uses 8-bit unsigned integer values."""
         if self.data.dtype != np.uint8:
             raise TypeError(f"MotionImage.data must be uint8, got {self.data.dtype}")
+
+
+@dataclass(frozen=True)
+class Window:
+    """A full run of consecutive frames, collected while motion lasted.
+
+    The handover between the collector and the two stages that read it:
+    the adaptive sampler measures how fast things moved from ``frames``,
+    and the encoder draws silhouettes from ``masks``. Both are carried
+    because neither can be recovered from the other, and they are carried
+    together because a mask is only meaningful beside the frame it came
+    from.
+
+    Contract:
+        ``frames`` and ``masks`` are the same length, and the entries at
+        any index were captured at the same moment. A window is never
+        empty and never partial: the collector emits one only once it is
+        full, so a stage reading this never has to ask whether it got a
+        whole one.
+
+    Attributes:
+        frames: The frames, in capture order. See ``Frame``.
+        masks: The foreground mask for each frame, in the same order.
+    """
+
+    frames: tuple[Frame, ...]
+    masks: tuple[Frame, ...]
+
+    def __post_init__(self) -> None:
+        """Ensure every frame kept its mask, and that there is anything here."""
+        if len(self.frames) != len(self.masks):
+            raise ValueError(
+                f"Window needs one mask per frame, got {len(self.frames)} "
+                f"frames and {len(self.masks)} masks"
+            )
+        if not self.frames:
+            raise ValueError("Window must not be empty")
+
+    def __len__(self) -> int:
+        """The number of frames in the window."""
+        return len(self.frames)
