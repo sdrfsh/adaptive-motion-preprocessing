@@ -1,4 +1,5 @@
 import logging
+from collections import deque
 
 import numpy as np
 
@@ -20,8 +21,41 @@ DEFAULT_FULL_SPEED = 0.35
 
 A share of the subject changing per frame. Normal walking measures about
 0.17 and running about 0.55, so 0.35 puts walking mid-range and running
-at the tightest spacing. Measured on synthetic masks — tune it on real
-footage.
+at the tightest spacing. Measured on synthetic masks. In auto mode this
+is only the starting point, used until the scene has taught a better one.
+"""
+
+AUTO_PERCENTILE = 90
+"""Where among the scene's recent change rates auto mode sets ``full_speed``.
+
+Not the maximum: a single flicker or mask glitch would drag the line up
+and leave every ordinary window spread out. The 90th percentile is the
+fast end of what the scene really does.
+"""
+
+AUTO_WARMUP_WINDOWS = 5
+"""Windows auto mode sees before it trusts what it has learned.
+
+Until then ``DEFAULT_FULL_SPEED`` is used, because a percentile of one or
+two readings is just those readings.
+"""
+
+AUTO_HISTORY_WINDOWS = 50
+"""Most recent windows auto mode learns from.
+
+Bounded, so a live stream holds a fixed amount of memory, and so a scene
+that changes pace — a walk turning into a run — is followed rather than
+averaged away. At the default ten-frame window and 30 fps this is about
+seventeen seconds of motion.
+"""
+
+AUTO_MIN_FULL_SPEED = 0.15
+"""The lowest ``full_speed`` auto mode will learn.
+
+Just under a walk. Without a floor, a scene of barely-moving subjects
+would learn a tiny line, count its own drift as fast, and pack the
+samples onto consecutive frames that hardly differ — the very failure
+the spacing exists to avoid.
 """
 
 
@@ -57,8 +91,14 @@ class AdaptiveFrameSampler:
     already "what is moving", so the share of it that changes between one
     frame and the next is a rate of change needing no optical flow.
 
-    Stateless: each window is judged on its own, so there is nothing to
-    reset between scenes.
+    ``full_speed`` is the change rate at which the spacing bottoms out,
+    and what counts as fast depends on the footage — distance, lens and
+    subject all move it. Left as ``None`` it is learned: the sampler
+    remembers the change rates of recent windows and uses the fast end of
+    them (see ``AUTO_PERCENTILE``), so whatever is fast *for this scene*
+    gets the tightest spacing. That makes the sampler stateful; call
+    ``reset()`` when the scene changes. Pass a number to fix it instead,
+    and every window is judged on its own.
 
     Args:
         sample_frames: Frames kept from every window. At least 2, so
@@ -67,13 +107,13 @@ class AdaptiveFrameSampler:
             at or below the collector's ``window_frames``.
         full_speed: Change rate at which the samples are packed onto
             consecutive frames, as a share of the subject changing per
-            frame.
+            frame. ``None``, the default, learns it from the scene.
     """
 
     def __init__(
         self,
         sample_frames: int = DEFAULT_SAMPLE_FRAMES,
-        full_speed: float = DEFAULT_FULL_SPEED,
+        full_speed: float | None = None,
     ) -> None:
         # bool is an int subclass, so it is refused by name before the
         # range check, where True would otherwise read as 1.
@@ -81,13 +121,18 @@ class AdaptiveFrameSampler:
             raise ValueError(f"sample_frames must be an integer, got {sample_frames!r}")
         if sample_frames < 2:
             raise ValueError(f"sample_frames must be at least 2, got {sample_frames}")
-        if isinstance(full_speed, bool) or not isinstance(full_speed, (int, float)):
-            raise ValueError(f"full_speed must be a number, got {full_speed!r}")
-        if not full_speed > 0:
-            raise ValueError(f"full_speed must be positive, got {full_speed!r}")
+        if full_speed is not None:
+            if isinstance(full_speed, bool) or not isinstance(full_speed, (int, float)):
+                raise ValueError(f"full_speed must be a number, got {full_speed!r}")
+            if not full_speed > 0:
+                raise ValueError(f"full_speed must be positive, got {full_speed!r}")
 
         self._sample_frames = sample_frames
-        self._full_speed = float(full_speed)
+        self._auto = full_speed is None
+        self._speeds: deque[float] = deque(maxlen=AUTO_HISTORY_WINDOWS)
+        self._full_speed = (
+            DEFAULT_FULL_SPEED if full_speed is None else float(full_speed)
+        )
 
     @property
     def sample_frames(self) -> int:
@@ -96,8 +141,27 @@ class AdaptiveFrameSampler:
 
     @property
     def full_speed(self) -> float:
-        """Change rate at which the samples sit on consecutive frames."""
+        """Change rate at which the samples sit on consecutive frames.
+
+        In auto mode, the value learned so far — ``DEFAULT_FULL_SPEED``
+        until warm-up ends. Look at this to see what the scene taught it.
+        """
         return self._full_speed
+
+    @property
+    def auto(self) -> bool:
+        """Whether ``full_speed`` is learned from the scene rather than fixed."""
+        return self._auto
+
+    def reset(self) -> None:
+        """Forget what the scene taught and start again from the default.
+
+        Only auto mode has anything to forget; a fixed ``full_speed`` is
+        left as it is.
+        """
+        self._speeds.clear()
+        if self._auto:
+            self._full_speed = DEFAULT_FULL_SPEED
 
     def velocity(self, window: Window) -> float:
         """Return how fast the foreground changes, over the second half of ``window``.
@@ -145,6 +209,10 @@ class AdaptiveFrameSampler:
     def select(self, window: Window) -> tuple[int, ...]:
         """Return the indices of the frames worth keeping from ``window``.
 
+        In auto mode this also teaches the sampler: the window's change
+        rate joins the history before ``full_speed`` is read, so the
+        window is judged against a line it helped draw.
+
         Args:
             window: The window to sample. See ``Window``.
 
@@ -158,6 +226,9 @@ class AdaptiveFrameSampler:
             return (0,)
 
         speed = self.velocity(window)
+        if self._auto:
+            self._learn(speed)
+
         # Saturating rather than proportional: past full_speed the
         # samples are already on consecutive frames and cannot tighten
         # further, and an outlier reading must not reach past it.
@@ -183,10 +254,19 @@ class AdaptiveFrameSampler:
         indices = np.linspace(last - span, last, count).round().astype(int)
 
         _log.debug(
-            "change rate %.4f -> %d frames spanning %d of %d",
+            "change rate %.4f (full speed %.4f) -> %d frames spanning %d of %d",
             speed,
+            self._full_speed,
             count,
             span,
             len(window),
         )
         return tuple(int(index) for index in indices)
+
+    def _learn(self, speed: float) -> None:
+        """Fold one window's change rate into the learned ``full_speed``."""
+        self._speeds.append(speed)
+        if len(self._speeds) < AUTO_WARMUP_WINDOWS:
+            return
+        learned = float(np.percentile(self._speeds, AUTO_PERCENTILE))
+        self._full_speed = max(AUTO_MIN_FULL_SPEED, learned)
