@@ -1,6 +1,10 @@
 from collections.abc import Iterable, Iterator
 
+from amprep.adaptive_sampler import DEFAULT_SAMPLE_FRAMES, AdaptiveFrameSampler
 from amprep.background_subtractor import BackgroundSubtractor, KNNBackgroundSubtractor
+from amprep.frame_window import DEFAULT_WINDOW_FRAMES, FrameWindowCollector
+from amprep.motion_history_encoder import MotionHistoryEncoder
+from amprep.motion_trigger import DEFAULT_THRESHOLD, MotionTrigger
 from amprep.noise_reducer import MedianNoiseReducer, NoiseReducer
 from amprep.types import Frame, MotionImage
 
@@ -18,17 +22,41 @@ class AdaptiveMotionPreprocessor:
     stage objects, so there is no second code path in which a stage is
     still missing.
 
+    While motion lasts, one ``MotionImage`` comes out every
+    ``window_frames`` frames. A subject that lingers produces a
+    continuous stream, so a caller wiring this to a network should expect
+    that.
+
+    State carries across ``process()`` calls: splitting one stream into
+    chunks gives the same result as one call. Call ``reset()`` when the
+    scene changes. Frames must keep one size until then.
+
     Args:
         noise_reducer: Removes sensor noise before subtraction. Defaults
             to ``MedianNoiseReducer``.
         background_subtractor: Separates moving foreground from the
             learned background. Defaults to ``KNNBackgroundSubtractor``.
+        motion_threshold: Share of the frame that must move. Default 1%.
+        window_frames: Frames per window. Default 10.
+        sample_frames: Frames kept per window. Default 4.
+        full_speed: Change rate at which sampling is tightest. ``None``,
+            the default, learns it from the scene; pass a number to fix
+            it.
+        width: Output width, or ``None`` to keep the frame width.
+        height: Output height, or ``None`` to keep the frame height.
     """
 
     def __init__(
         self,
         noise_reducer: NoiseReducer | None = None,
         background_subtractor: BackgroundSubtractor | None = None,
+        *,
+        motion_threshold: float = DEFAULT_THRESHOLD,
+        window_frames: int = DEFAULT_WINDOW_FRAMES,
+        sample_frames: int = DEFAULT_SAMPLE_FRAMES,
+        full_speed: float | None = None,
+        width: int | None = None,
+        height: int | None = None,
     ) -> None:
         if noise_reducer is None:
             noise_reducer = MedianNoiseReducer()
@@ -47,6 +75,24 @@ class AdaptiveMotionPreprocessor:
 
         self._noise_reducer = noise_reducer
         self._background_subtractor = background_subtractor
+
+        # Each stage checks its own setting.
+        self._trigger = MotionTrigger(threshold=motion_threshold)
+        self._collector = FrameWindowCollector(window_frames=window_frames)
+        self._sampler = AdaptiveFrameSampler(
+            sample_frames=sample_frames, full_speed=full_speed
+        )
+        self._encoder = MotionHistoryEncoder(width=width, height=height)
+
+        # The one check no single stage can do.
+        if self._sampler.sample_frames > self._collector.window_frames:
+            raise ValueError(
+                f"sample_frames ({sample_frames}) cannot exceed "
+                f"window_frames ({window_frames})"
+            )
+
+        self._frames_seen = 0
+        self._frame_shape: tuple[int, ...] | None = None
 
     def process(self, frames: Iterable[Frame]) -> Iterator[MotionImage]:
         """Turn a stream of frames into encoded motion images.
@@ -78,15 +124,48 @@ class AdaptiveMotionPreprocessor:
 
         Yields:
             One ``MotionImage`` per completed window.
+
+        Raises:
+            ValueError: If the frame size changes mid-stream. Call
+                ``reset()`` first when it is meant to.
         """
         for frame in frames:
-            denoised = self._noise_reducer.apply(frame)
-            self._background_subtractor.apply(denoised)
-            # Whatever this frame completed goes here, and so far that is
-            # nothing: the stages that turn a mask into a window and a
-            # window into a MotionImage are not built, so no window ever
-            # completes. The empty ``yield from`` is not a placeholder for
-            # its own sake — a function is a generator only if a ``yield``
-            # appears in its body, and consuming the input lazily depends
-            # on this being one.
-            yield from ()
+            denoised = self._noise_reducer.apply(frame)  # also validates the frame
+            self._check_frame_shape(denoised)
+            mask = self._background_subtractor.apply(denoised)
+
+            # The model still learns from these frames; only its verdict
+            # is ignored.
+            self._frames_seen += 1
+            if self._frames_seen <= self._background_subtractor.warmup_frames:
+                continue
+
+            active = self._trigger.update(mask)
+            window = self._collector.update(frame, mask, active)
+            if window is not None:
+                yield self._encoder.encode(window, self._sampler.select(window))
+
+    def reset(self) -> None:
+        """Start over for a new scene.
+
+        Forgets the background, motion, any half-full window, the learned
+        ``full_speed``, the warm-up count and the frame size. Never called
+        automatically: a fixed camera fed in chunks should keep what it
+        has learned.
+        """
+        self._background_subtractor.reset()
+        self._trigger.reset()
+        self._collector.reset()
+        self._sampler.reset()
+        self._frames_seen = 0
+        self._frame_shape = None
+
+    def _check_frame_shape(self, frame: Frame) -> None:
+        """Raise if the frame size changed since the stream began."""
+        if self._frame_shape is None:
+            self._frame_shape = frame.shape
+        elif frame.shape != self._frame_shape:
+            raise ValueError(
+                f"frame size changed from {self._frame_shape} to {frame.shape}; "
+                "call reset() before processing frames of a different size"
+            )
