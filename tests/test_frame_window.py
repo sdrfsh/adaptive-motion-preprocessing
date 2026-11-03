@@ -13,27 +13,19 @@ SHAPE = (4, 4)
 """Small enough to be free, large enough to be a real array."""
 
 
-def _frame(value: int) -> Frame:
-    """A frame carrying ``value``, so its place in a window is readable."""
-    return np.full((*SHAPE, 3), value, dtype=np.uint8)
-
-
 def _mask(value: int) -> Frame:
-    """The matching mask for ``_frame(value)``, carrying the same value."""
+    """A mask carrying ``value``, so its place in a window is readable."""
     return np.full(SHAPE, value, dtype=np.uint8)
 
 
 def _feed(collector: FrameWindowCollector, count: int, active: bool = True, start=0):
     """Push ``count`` numbered frames through and return what came out."""
-    return [
-        collector.update(_frame(i), _mask(i), active)
-        for i in range(start, start + count)
-    ]
+    return [collector.update(_mask(i), active) for i in range(start, start + count)]
 
 
 def _values(window: Window) -> list[int]:
-    """The numbers the window's frames were built from, in order."""
-    return [int(frame[0, 0, 0]) for frame in window.frames]
+    """The numbers the window's masks were built from, in order."""
+    return [int(mask[0, 0]) for mask in window.masks]
 
 
 def test_default_window_is_ten_frames():
@@ -102,15 +94,21 @@ def test_the_window_carries_its_frames_in_order():
     assert _values(window) == [0, 1, 2, 3]
 
 
-def test_every_frame_keeps_its_mask():
-    """Frames and masks line up by index, which is the whole point of pairing."""
-    collector = FrameWindowCollector(window_frames=4)
+def test_the_window_holds_the_masks_it_was_given():
+    """The very arrays handed in come out, not copies or derivations."""
+    collector = FrameWindowCollector(window_frames=3)
+    masks = [_mask(i) for i in range(3)]
 
-    window = _feed(collector, 4)[-1]
+    window = [collector.update(mask, True) for mask in masks][-1]
 
-    assert len(window.frames) == len(window.masks) == 4
-    for frame, mask in zip(window.frames, window.masks, strict=True):
-        assert int(mask[0, 0]) == int(frame[0, 0, 0])
+    assert all(a is b for a, b in zip(window.masks, masks, strict=True))
+
+
+def test_the_window_carries_no_frames():
+    """Nothing downstream reads frames, so none are held in memory."""
+    window = _feed(FrameWindowCollector(window_frames=2), 2)[-1]
+
+    assert not hasattr(window, "frames")
 
 
 def test_the_next_window_starts_on_the_very_next_frame():
@@ -151,7 +149,7 @@ def test_a_partial_window_is_discarded_when_motion_stops():
 
     assert collector.pending == 6
 
-    assert collector.update(_frame(99), _mask(99), active=False) is None
+    assert collector.update(_mask(99), active=False) is None
     assert collector.pending == 0
 
 
@@ -159,7 +157,7 @@ def test_a_discarded_window_is_never_emitted_later():
     """The dropped fragment does not reappear at the front of the next window."""
     collector = FrameWindowCollector(window_frames=4)
     _feed(collector, 3)
-    collector.update(_frame(99), _mask(99), active=False)
+    collector.update(_mask(99), active=False)
 
     window = _feed(collector, 4, start=10)[-1]
 
@@ -179,7 +177,7 @@ def test_motion_stopping_on_a_full_window_loses_nothing():
     collector = FrameWindowCollector(window_frames=3)
 
     results = _feed(collector, 3)
-    after = collector.update(_frame(99), _mask(99), active=False)
+    after = collector.update(_mask(99), active=False)
 
     assert isinstance(results[-1], Window)
     assert after is None
@@ -190,7 +188,7 @@ def test_bursts_are_collected_independently():
     collector = FrameWindowCollector(window_frames=3)
 
     _feed(collector, 2)
-    collector.update(_frame(99), _mask(99), active=False)
+    collector.update(_mask(99), active=False)
     window = _feed(collector, 3, start=20)[-1]
 
     assert _values(window) == [20, 21, 22]
@@ -229,21 +227,15 @@ def test_the_properties_are_read_only(name):
         setattr(collector, name, 3)
 
 
-def test_window_rejects_a_mask_count_that_does_not_match():
-    """A window with a frame missing its mask is not constructible."""
-    with pytest.raises(ValueError, match="one mask per frame"):
-        Window(frames=(_frame(0), _frame(1)), masks=(_mask(0),))
-
-
 def test_window_rejects_being_empty():
     """An empty window describes nothing and is never emitted."""
     with pytest.raises(ValueError, match="must not be empty"):
-        Window(frames=(), masks=())
+        Window(masks=())
 
 
 def test_window_is_frozen():
     """A window is a handover, not a workspace for the stage that gets it."""
-    window = Window(frames=(_frame(0),), masks=(_mask(0),))
+    window = Window(masks=(_mask(0),))
 
     with pytest.raises(AttributeError):
-        window.frames = ()
+        window.masks = ()

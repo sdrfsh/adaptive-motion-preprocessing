@@ -88,6 +88,20 @@ class AdaptiveMotionPreprocessor:
         self._frames_seen = 0
         self._frame_shape: tuple[int, ...] | None = None
 
+    @property
+    def last_motion_fraction(self) -> float:
+        """Share of the most recent frame that was moving, in ``[0, 1]``.
+
+        The reading ``motion_threshold`` is compared against, so this is
+        the number to watch when tuning it on real footage: print it while
+        the scene is still and while something moves, and set the
+        threshold between the two.
+
+        Zero before the first frame is measured, during the background
+        subtractor's warm-up, and after ``reset()``.
+        """
+        return self._trigger.last_fraction
+
     def process(self, frames: Iterable[Frame]) -> Iterator[MotionImage]:
         """Turn a stream of frames into encoded motion images.
 
@@ -135,7 +149,7 @@ class AdaptiveMotionPreprocessor:
                 continue
 
             active = self._trigger.update(mask)
-            window = self._collector.update(frame, mask, active)
+            window = self._collector.update(mask, active)
             if window is not None:
                 yield self._encoder.encode(window, self._sampler.select(window))
 

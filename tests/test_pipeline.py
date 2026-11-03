@@ -173,3 +173,58 @@ def test_reset_allows_a_new_frame_size():
     preprocessor.reset()
 
     list(preprocessor.process([np.zeros((30, 40, 3), np.uint8)] * 3))  # no error
+
+
+# ---- last_motion_fraction ----
+
+
+def test_last_motion_fraction_starts_at_zero():
+    assert AdaptiveMotionPreprocessor().last_motion_fraction == 0.0
+
+
+def test_last_motion_fraction_reads_the_latest_frame():
+    """The block is 20x20 of a 60x80 frame, so about a twelfth of it moves.
+
+    About, because the default median filter rounds the block's corners
+    off before the mask is taken.
+    """
+    preprocessor = AdaptiveMotionPreprocessor(background_subtractor=_Threshold())
+    moving = _scene(0, 1, 0)
+
+    list(preprocessor.process(moving))
+
+    assert preprocessor.last_motion_fraction == pytest.approx(
+        20 * 20 / (H * W), rel=0.05
+    )
+
+
+def test_last_motion_fraction_drops_to_zero_on_a_still_frame():
+    preprocessor = AdaptiveMotionPreprocessor(background_subtractor=_Threshold())
+
+    list(preprocessor.process(_scene(0, 1, 0)))
+    list(preprocessor.process([np.full((H, W, 3), 120, np.uint8)]))
+
+    assert preprocessor.last_motion_fraction == 0.0
+
+
+def test_last_motion_fraction_is_untouched_during_warmup():
+    """Warm-up masks are not trusted, so they are not reported either."""
+    preprocessor = AdaptiveMotionPreprocessor()
+
+    list(preprocessor.process(_scene(0, 4, 0)))  # all four are warm-up
+
+    assert preprocessor.last_motion_fraction == 0.0
+
+
+def test_reset_clears_last_motion_fraction():
+    preprocessor = AdaptiveMotionPreprocessor(background_subtractor=_Threshold())
+    list(preprocessor.process(_scene(0, 1, 0)))
+
+    preprocessor.reset()
+
+    assert preprocessor.last_motion_fraction == 0.0
+
+
+def test_last_motion_fraction_is_read_only():
+    with pytest.raises(AttributeError):
+        AdaptiveMotionPreprocessor().last_motion_fraction = 0.5

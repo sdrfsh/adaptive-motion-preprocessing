@@ -41,6 +41,7 @@ class MotionTrigger:
 
     @property
     def is_active(self) -> bool:
+        """Whether the last mask counted as motion."""
         return self._active
 
     @property
