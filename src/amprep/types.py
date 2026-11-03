@@ -54,41 +54,32 @@ class MotionImage:
 
 @dataclass(frozen=True)
 class Window:
-    """A full run of consecutive frames, collected while motion lasted.
+    """A full run of consecutive foreground masks, collected while motion lasted.
 
     The handover between the collector and the two stages that read it:
-    the adaptive sampler measures how fast things moved from ``masks``,
-    where the foreground centroid is trivially locatable, and the encoder
-    stacks the ``frames`` the sampler picked. Both are carried because
-    neither can be recovered from the other, and they are carried
-    together because a mask is only meaningful beside the frame it came
-    from.
+    the adaptive sampler measures how fast the foreground changes across
+    ``masks``, and the encoder paints the masks the sampler picked. Both
+    work on masks alone, so the frames themselves are not carried: a
+    window of full-colour frames would cost memory and nothing would
+    read it.
 
     Contract:
-        ``frames`` and ``masks`` are the same length, and the entries at
-        any index were captured at the same moment. A window is never
-        empty and never partial: the collector emits one only once it is
-        full, so a stage reading this never has to ask whether it got a
-        whole one.
+        ``masks`` is in capture order, one per frame, each a ``uint8``
+        ``(H, W)`` array. A window is never empty and never partial: the
+        collector emits one only once it is full, so a stage reading this
+        never has to ask whether it got a whole one.
 
     Attributes:
-        frames: The frames, in capture order. See ``Frame``.
-        masks: The foreground mask for each frame, in the same order.
+        masks: The foreground mask of each frame, in capture order.
     """
 
-    frames: tuple[Frame, ...]
     masks: tuple[Frame, ...]
 
     def __post_init__(self) -> None:
-        """Ensure every frame kept its mask, and that there is anything here."""
-        if len(self.frames) != len(self.masks):
-            raise ValueError(
-                f"Window needs one mask per frame, got {len(self.frames)} "
-                f"frames and {len(self.masks)} masks"
-            )
-        if not self.frames:
+        """Ensure there is anything here."""
+        if not self.masks:
             raise ValueError("Window must not be empty")
 
     def __len__(self) -> int:
         """The number of frames in the window."""
-        return len(self.frames)
+        return len(self.masks)

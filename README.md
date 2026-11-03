@@ -84,6 +84,10 @@ All optional keyword arguments of `AdaptiveMotionPreprocessor(...)`:
 - 🎬 **New scene?** Call `reset()`. It forgets the background, any half-built
   window and the frame size. Otherwise state carries over between
   `process()` calls.
+- 🎚️ **Tuning the threshold.** `preprocessor.last_motion_fraction` is the
+  share of the latest frame that was moving. Read it once with the scene
+  still and once with something moving, and set `motion_threshold`
+  between the two.
 - 📐 **One frame size per scene.** Frames that change size mid-stream raise a
   `ValueError`. Call `reset()` first if the change is on purpose.
 

@@ -27,9 +27,8 @@ standing still: a property of the scaffold, not of the sampler.
 
 
 def _window(masks: list[np.ndarray]) -> Window:
-    """Wrap masks in a window, with blank frames the sampler never reads."""
-    blanks = tuple(np.zeros((*mask.shape, 3), np.uint8) for mask in masks)
-    return Window(frames=blanks, masks=tuple(masks))
+    """Wrap masks in a window."""
+    return Window(masks=tuple(masks))
 
 
 def _moving_window(frames: int, pixels_per_frame: float) -> Window:

@@ -15,8 +15,8 @@ the two is the caller's arithmetic.
 MIN_WINDOW_FRAMES = 2
 """Fewest frames a window can be asked to hold.
 
-The adaptive sampler compares the first frame of a window against the
-middle one, which needs two distinct frames to be a comparison at all.
+The adaptive sampler measures change between consecutive masks, which
+needs at least one pair of frames to be a comparison at all.
 """
 
 
@@ -32,9 +32,9 @@ class FrameWindowCollector:
         trigger:  idle   ACTIVE x 10        ACTIVE x 10        idle
         window:          [1..10] -> out     [1..10] -> out     (partial, dropped)
 
-    Frames and their masks are kept together, because the two stages
-    downstream need different halves of the same moment: the sampler
-    reads frames, the encoder reads masks.
+    Only the foreground masks are kept. Both stages downstream, the
+    sampler and the encoder, read masks alone, so holding on to the
+    full-colour frames as well would cost memory for nothing.
 
     A partial window is discarded when motion stops. Velocity is measured
     across a window, so a window cut short describes a slower movement
@@ -74,7 +74,7 @@ class FrameWindowCollector:
         Zero between windows as well as while idle: a window that is
         handed over leaves nothing behind it.
         """
-        return len(self._frames)
+        return len(self._masks)
 
     def reset(self) -> None:
         """Drop whatever was being collected and start again empty.
@@ -93,15 +93,14 @@ class FrameWindowCollector:
         just handed a full one over. Should ``reset`` ever grow behaviour
         that belongs to a new scene, it must not fire on those.
         """
-        self._frames: list[Frame] = []
         self._masks: list[Frame] = []
 
-    def update(self, frame: Frame, mask: Frame, active: bool) -> Window | None:
-        """Take one frame, and return a window if this frame completed one.
+    def update(self, mask: Frame, active: bool) -> Window | None:
+        """Take one frame's mask, and return a window if it completed one.
 
         Args:
-            frame: The frame captured at this moment. See ``Frame``.
-            mask: Its foreground mask, from the background subtractor.
+            mask: The foreground mask of the frame captured at this
+                moment, from the background subtractor.
             active: The trigger's verdict on this frame. ``False`` drops
                 this frame and discards anything part-collected with it.
 
@@ -111,18 +110,17 @@ class FrameWindowCollector:
             so consecutive windows share no frames.
         """
         if not active:
-            if self._frames:
-                _log.debug("motion ended, dropping %d frames", len(self._frames))
+            if self._masks:
+                _log.debug("motion ended, dropping %d frames", len(self._masks))
                 self._clear()
             return None
 
-        self._frames.append(frame)
         self._masks.append(mask)
 
-        if len(self._frames) < self._window_frames:
+        if len(self._masks) < self._window_frames:
             return None
 
-        window = Window(frames=tuple(self._frames), masks=tuple(self._masks))
+        window = Window(masks=tuple(self._masks))
         # Emptied rather than kept, so the next frame opens the next
         # window: that is what "no cooldown" means here.
         self._clear()

@@ -6,8 +6,7 @@ from amprep.types import Window
 
 
 def _window(masks):
-    frames = tuple(np.zeros((*m.shape, 3), np.uint8) for m in masks)
-    return Window(frames=frames, masks=tuple(masks))
+    return Window(masks=tuple(masks))
 
 
 def _full(h, w, count):
